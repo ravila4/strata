@@ -4,6 +4,9 @@ Strata records code metrics from Git commits and displays them in a live dashboa
 It uses [scb-check](https://github.com/gabeorlanski/scb-check) to measure Python,
 Rust, and JavaScript source.
 
+Named for geological layers, Strata helps you explore how your codebase builds up
+and changes over time.
+
 Browse directories and files, follow changes across commits, and open the source
 behind a measurement with syntax highlighting and metric hotspots. Source windows
 show the selected commit's code, even when the working tree has changed.
