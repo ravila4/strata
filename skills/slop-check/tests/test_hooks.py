@@ -109,17 +109,99 @@ def test_install_preserves_original_hook_location(repo, tmp_path):
     )
 
 
-def test_commit_succeeds_when_recorder_fails(repo):
-    load("install_hook").install(repo, ["src"], "rust")
-    (repo / ".slop-check/record_commit.py").write_text(
-        'raise RuntimeError("analyzer unavailable")\n'
-    )
+@pytest.mark.parametrize(
+    "missing", ["queue_commit.py", "record_commit.py", "analyze_snapshot.py"]
+)
+def test_missing_shared_runtime_logs_without_blocking_commit(
+    repo, tmp_path, monkeypatch, missing
+):
+    installer = load("install_hook")
+    runtime = tmp_path / "shared's runtime" / "scripts"
+    runtime.mkdir(parents=True)
+    for name in (
+        "install_hook.py",
+        "queue_commit.py",
+        "record_commit.py",
+        "analyze_snapshot.py",
+    ):
+        (runtime / name).write_text((SCRIPTS / name).read_text())
+    monkeypatch.setattr(installer, "__file__", str(runtime / "install_hook.py"))
+    installer.install(repo, ["src"], "rust")
+    (runtime / missing).unlink()
     result = subprocess.run(
         ["git", "-C", str(repo), "commit", "--allow-empty", "-qm", "advisory"],
         capture_output=True,
+        check=False,
     )
     assert result.returncode == 0
-    assert git(repo, "log", "-1", "--format=%s") == "advisory"
+    diagnostic = (repo / ".slop-check/worker.log").read_text()
+    assert "shared runtime" in diagnostic
+    assert diagnostic.endswith("\n")
+
+
+def test_hook_uses_shared_runtime_without_copying_code(repo):
+    load("install_hook").install(repo, ["src"], "rust")
+    output = repo / ".slop-check"
+    settings = json.loads((output / "settings.json").read_text())
+    assert settings["source_runtime"] == str(SCRIPTS.parent.resolve())
+    assert (
+        str(SCRIPTS / "queue_commit.py") in (output / "hooks/post-commit").read_text()
+    )
+    assert not list(output.rglob("*.py"))
+
+
+def test_hook_removal_restores_original_configuration_and_keeps_data(repo):
+    installer = load("install_hook")
+    installer.install(repo, ["src"], "rust")
+    output = repo / ".slop-check"
+    (output / "history.jsonl").write_text("retained\n")
+    installer.remove(repo)
+    assert (output / "history.jsonl").read_text() == "retained\n"
+    assert not (output / "hooks").exists()
+    assert (
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--get", "core.hooksPath"],
+            check=False,
+        ).returncode
+        == 1
+    )
+
+
+def test_hook_removal_refuses_changed_configuration(repo):
+    installer = load("install_hook")
+    installer.install(repo, ["src"], "rust")
+    git(repo, "config", "--local", "core.hooksPath", "/changed")
+    with pytest.raises(ValueError, match="changed"):
+        installer.remove(repo)
+
+
+def test_hook_accepts_owned_server_first_installation(repo):
+    import hashlib
+
+    output = repo / ".slop-check"
+    output.mkdir()
+    (output / "server-settings.json").write_text(
+        json.dumps(
+            {
+                "label": "dev.slop-check."
+                + hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:12],
+                "source_runtime": str(SCRIPTS.parent.resolve()),
+                "port": 18769,
+                "mount": "/slop/test",
+                "tailscale": False,
+            }
+        )
+    )
+    load("install_hook").install(repo, ["src"], "rust")
+    assert (output / "server-settings.json").exists()
+
+
+def test_hook_rejects_foreign_server_first_installation(repo):
+    output = repo / ".slop-check"
+    output.mkdir()
+    (output / "server-settings.json").write_text(json.dumps({"label": "foreign"}))
+    with pytest.raises(ValueError, match="not owned"):
+        load("install_hook").install(repo, ["src"], "rust")
 
 
 def test_failed_analysis_is_logged_without_metrics(repo):
@@ -384,7 +466,7 @@ else:
     settings = json.loads((output / "settings.json").read_text())
     settings["uvx"] = str(analyzer)
     (output / "settings.json").write_text(json.dumps(settings))
-    queue = output / "queue_commit.py"
+    queue = SCRIPTS / "queue_commit.py"
     command = [sys.executable, str(queue), "--repo", str(repo), "--output", str(output)]
     subprocess.run(command, check=True)
     first = git(repo, "rev-parse", "HEAD")
@@ -426,3 +508,33 @@ else:
             (output / "started").read_text().splitlines() == [first, newest, restart]
         )
     )
+
+
+def test_hook_can_be_reinstalled_after_removal(repo):
+    installer = load("install_hook")
+    installer.install(repo, ["src"], "rust")
+    installer.remove(repo)
+    installer.install(repo, ["src"], "rust")
+    installer.remove(repo)
+    assert (
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--get", "core.hooksPath"],
+            check=False,
+        ).returncode
+        == 1
+    )
+
+
+@pytest.mark.parametrize("entry", ["settings.json", "hooks", "post-commit"])
+def test_reinstall_rejects_symlinked_configuration(repo, tmp_path, entry):
+    installer = load("install_hook")
+    installer.install(repo, ["src"], "rust")
+    output = repo / ".slop-check"
+    original = (
+        output / entry if entry != "post-commit" else output / "hooks/post-commit"
+    )
+    target = tmp_path / "external"
+    original.rename(target)
+    original.symlink_to(target, target_is_directory=target.is_dir())
+    with pytest.raises(ValueError, match="symlink"):
+        installer.install(repo, ["src"], "rust")

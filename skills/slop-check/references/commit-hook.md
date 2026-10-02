@@ -6,31 +6,33 @@ For one-off measurements without hooks, use the
 [live dashboard workflow](dashboard.md#record-without-installing-a-hook).
 Install from the primary checkout; linked worktrees share hook configuration,
 so installation from a linked worktree is rejected. Commits made in linked
-worktrees use the primary checkout's recorder and shared history.
+worktrees use the shared runtime and write to the primary checkout's history.
 Choose explicit source roots and one of `rust`, `python`, or `javascript` after
 inspecting the repository. For mixed-language projects, discuss the desired
 measurement scope before installing; this installer measures one language.
 
-Run the scripts relative to this skill's directory:
+Run these commands from the shared skill installation's directory:
 
 ```sh
 python3 scripts/install_hook.py --repo /absolute/path/to/repo \
   --source-root src --source-root crates --language rust
-python3 /absolute/path/to/repo/.slop-check/record_commit.py \
+python3 scripts/record_commit.py \
   --repo /absolute/path/to/repo
 ```
 
-The installer copies the recorder into `.slop-check/`, adds `/.slop-check/` to
-`.git/info/exclude`, and sets repository-local `core.hooksPath`. It records the
-previous hook configuration in `.slop-check/settings.json`. Executable existing
+The installer adds `/.slop-check/` to `.git/info/exclude` and sets
+repository-local `core.hooksPath`. It saves the resolved shared skill directory
+as `source_runtime` and the previous hook configuration in
+`.slop-check/settings.json`. Repository hooks invoke that runtime; application
+scripts and dashboard assets stay in the shared installation. Executable existing
 hooks are delegated to by their original absolute paths, preserving relative
 resource lookup. An existing post-commit hook runs before the recorder. Global
 Git settings and tracked repository files are not changed. Reinstallation
-updates the recorder and selection while retaining the original hook settings;
+updates the runtime path and selection while retaining the original hook settings;
 it refuses to proceed if the active hook configuration has changed.
-Installation also preserves one-off measurements and regular
-`server.stdout.log`/`server.stderr.log` files in `.slop-check/`. Unexpected files
-or symlinks are rejected rather than overwritten.
+For a directory without hook configuration, installation accepts recorded
+history or owned server settings and regular `server.stdout.log`/`server.stderr.log`
+files. It rejects unexpected files and symlinks instead of overwriting them.
 
 The post-commit hook captures the committing checkout and full SHA, queues the
 job, launches a detached worker, and exits zero. One analysis runs at a time.
@@ -39,6 +41,13 @@ replaced commits receive `skipped` history rows with the replacement SHA. The
 current analysis finishes before the newest pending commit begins. With no
 pending work, the worker exits; the next commit launches it again. There is no
 commit-count threshold or timer between runs.
+
+Updates apply to newly launched processes. Let active scans finish before
+replacing or removing runtime files. Keep the installation at its saved path;
+if it moves, rerun the installer from the new directory for each repository.
+If the shared runtime is missing, the hook records a diagnostic in local
+`worker.log` and exits zero. Each repository has its own configuration, queue,
+reports, and history even when repositories use the same runtime.
 
 Dependency setup has a 60-second timeout and analysis has a 120-second timeout.
 Those waits happen in the worker. Record actual analysis durations from history
@@ -83,7 +92,7 @@ For direct synchronous measurement, invoke the recorder manually. To verify the
 background path, run:
 
 ```sh
-python3 /absolute/path/to/repo/.slop-check/queue_commit.py \
+python3 scripts/queue_commit.py \
   --repo /absolute/path/to/repo --output /absolute/path/to/repo/.slop-check
 ```
 
@@ -92,8 +101,13 @@ parse counts, and stderr. Verify preserved hooks through the installed path,
 especially hooks that locate sibling resources. Do not create a commit in the
 user's repo solely to test installation; use a temporary Git repo for that.
 
-To disable, restore `previous_local_hooks_path` from `settings.json` using
-`git config --local core.hooksPath <saved-value>`, or if it is null, run
-`git config --local --unset core.hooksPath`. Keep `.slop-check/` excluded while
-retaining logs. After restoration, the directory and its exclude entry may be
-removed if the user also wants to delete the local history.
+To disable automatic recording, run from the shared skill directory:
+
+```sh
+python3 scripts/install_hook.py --repo /absolute/path/to/repo --remove
+```
+
+Removal restores the previous local hook configuration and retains measurements,
+logs, and configuration in `.slop-check/`. Keep that directory excluded while
+retaining local history. Delete the local history and its exclude entry only
+when the user requests their removal.

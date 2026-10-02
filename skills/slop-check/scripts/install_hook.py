@@ -1,6 +1,7 @@
 """Install a repository-local advisory SlopCodeBench hook."""
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -35,6 +36,11 @@ def install(repo: Path, roots: list[str], language: str) -> None:
     output = repo / ".slop-check"
     hooks = output / "hooks"
     settings_path = output / "settings.json"
+    paths = [output, settings_path, hooks]
+    if hooks.is_dir():
+        paths.extend(hooks.iterdir())
+    if any(path.is_symlink() for path in paths):
+        raise ValueError("Hook installation paths must not be symlinks")
     if output.exists() and not settings_path.exists():
         history = output / "history.jsonl"
         reports = output / "reports"
@@ -43,19 +49,34 @@ def install(repo: Path, roots: list[str], language: str) -> None:
             logs = {"server.stdout.log", "server.stderr.log"}
             owned = (
                 not output.is_symlink()
-                and {"history.jsonl", "reports"} <= names
-                and names <= {"history.jsonl", "reports"} | logs
+                and names <= {"history.jsonl", "reports", "server-settings.json"} | logs
                 and all(
                     (output / name).is_file() and not (output / name).is_symlink()
-                    for name in names & logs
+                    for name in names
+                    & (logs | {"history.jsonl", "server-settings.json"})
                 )
-                and history.is_file()
-                and not history.is_symlink()
-                and reports.is_dir()
-                and not reports.is_symlink()
-                and all(
-                    Path(json.loads(line)["repository"]).resolve() == repo
-                    for line in history.read_text().splitlines()
+                and (
+                    "reports" not in names
+                    or (reports.is_dir() and not reports.is_symlink())
+                )
+                and (
+                    ({"history.jsonl", "reports"} <= names)
+                    or "server-settings.json" in names
+                )
+                and (
+                    "history.jsonl" not in names
+                    or all(
+                        Path(json.loads(line)["repository"]).resolve() == repo
+                        for line in history.read_text().splitlines()
+                    )
+                )
+                and (
+                    "server-settings.json" not in names
+                    or json.loads((output / "server-settings.json").read_text())[
+                        "label"
+                    ]
+                    == "dev.slop-check."
+                    + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
                 )
             )
         except (OSError, ValueError, KeyError, TypeError):
@@ -66,9 +87,9 @@ def install(repo: Path, roots: list[str], language: str) -> None:
             )
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
-        if git(
-            repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks"
-        ) != str(hooks):
+        if git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks") != (
+            str(hooks) if hooks.exists() else settings["previous_effective_hooks_path"]
+        ):
             raise ValueError(
                 "Hook configuration changed since installation; inspect before reinstalling"
             )
@@ -103,27 +124,34 @@ def install(repo: Path, roots: list[str], language: str) -> None:
         wrapper = hooks / name
         wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(original)} "$@"\n')
         wrapper.chmod(0o755)
-    shutil.copyfile(
-        Path(__file__).with_name("record_commit.py"), output / "record_commit.py"
-    )
-    shutil.copyfile(
-        Path(__file__).with_name("queue_commit.py"), output / "queue_commit.py"
-    )
-    shutil.copyfile(
-        Path(__file__).with_name("analyze_snapshot.py"), output / "analyze_snapshot.py"
-    )
+    runtime = Path(__file__).resolve().parents[1]
     settings.update(
-        source_roots=roots, language=language, uvx=uvx, python=sys.executable
+        source_roots=roots,
+        language=language,
+        uvx=uvx,
+        python=sys.executable,
+        source_runtime=str(runtime),
     )
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     original_post = settings["previous_hooks"].get("post-commit")
     preserved_post = f'{shlex.quote(original_post)} "$@"\n' if original_post else ""
     post = hooks / "post-commit"
+    queue = shlex.quote(str(runtime / "scripts/queue_commit.py"))
+    log = shlex.quote(str(output / "worker.log"))
+    required = [
+        runtime / "scripts" / name
+        for name in ("queue_commit.py", "record_commit.py", "analyze_snapshot.py")
+    ]
+    missing = " || ".join(f"[ ! -r {shlex.quote(str(path))} ]" for path in required)
+    error = shlex.quote(f"slop-check: shared runtime missing or incomplete: {runtime}")
     post.write_text(
         "#!/bin/sh\n"
         + preserved_post
-        + f"{shlex.quote(sys.executable)} {shlex.quote(str(output / 'queue_commit.py'))} --repo . --output {shlex.quote(str(output))}\n"
-        + "exit 0\n"
+        + f"if {missing}; then\n"
+        + f"  printf '%s\\n' {error} >> {log}\n"
+        + "else\n"
+        + f"  {shlex.quote(sys.executable)} {queue} --repo . --output {shlex.quote(str(output))} >> {log} 2>&1\n"
+        + "fi\nexit 0\n"
     )
     post.chmod(0o755)
     exclude = Path(
@@ -138,15 +166,45 @@ def install(repo: Path, roots: list[str], language: str) -> None:
     print(f"Installed advisory post-commit hook. History: {output / 'history.jsonl'}")
 
 
+def remove(repo: Path) -> None:
+    """Restore original hook configuration while retaining measurements and logs."""
+    repo = Path(git(repo.resolve(), "rev-parse", "--show-toplevel"))
+    git_dir = git(repo, "rev-parse", "--absolute-git-dir")
+    common_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if Path(git_dir).resolve() != Path(common_dir).resolve():
+        raise ValueError("Remove from the primary checkout")
+    output = repo / ".slop-check"
+    hooks = output / "hooks"
+    settings = json.loads((output / "settings.json").read_text())
+    if git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks") != str(
+        hooks
+    ):
+        raise ValueError(
+            "Hook configuration changed since installation; inspect before removing"
+        )
+    previous = settings["previous_local_hooks_path"]
+    if previous is None:
+        git(repo, "config", "--local", "--unset", "core.hooksPath")
+    else:
+        git(repo, "config", "--local", "core.hooksPath", previous)
+    shutil.rmtree(hooks)
+    # Retain configuration for workers already processing queued commits.
+    print(f"Removed advisory hook. Retained measurements: {output}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--source-root", action="append", required=True)
-    parser.add_argument(
-        "--language", choices=["rust", "python", "javascript"], required=True
-    )
+    parser.add_argument("--source-root", action="append")
+    parser.add_argument("--language", choices=["rust", "python", "javascript"])
+    parser.add_argument("--remove", action="store_true")
     args = parser.parse_args()
-    install(args.repo, args.source_root, args.language)
+    if args.remove:
+        remove(args.repo)
+    else:
+        if not args.source_root or not args.language:
+            parser.error("--source-root and --language are required for installation")
+        install(args.repo, args.source_root, args.language)
 
 
 if __name__ == "__main__":
