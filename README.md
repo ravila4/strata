@@ -1,33 +1,61 @@
 # Strata
 
-Strata measures code size, complexity, erosion, and duplication across Git history.
-It records local commit snapshots and provides an interactive dashboard with
-linked directory and historical views.
+Strata records code metrics from Git commits and displays them in a live dashboard.
+It uses [scb-check](https://github.com/gabeorlanski/scb-check) to measure Python,
+Rust, and JavaScript source.
 
-## Current tools
+Browse directories and files, follow changes across commits, and open the source
+behind a measurement with syntax highlighting and metric hotspots. Source windows
+show the selected commit's code, even when the working tree has changed.
 
-The working runtime and agent skill live in `skills/slop-check/`. The bundle was
-extracted from `ravila4/claude-code-config` at commit `4d43b9e`. Its existing
-`slop-check` commands and `.slop-check/` data directory are retained.
+[![Strata's directory explorer and commit timeline](docs/images/dashboard.png)](docs/images/dashboard.png)
 
-- Advisory post-commit recording for Python, Rust, or JavaScript.
-- Live dashboard with commit-pinned source windows, syntax highlighting, and metric hotspots.
-- Offline HTML snapshot export.
-- Sunburst and historical plots for complexity, cyclomatic erosion, cognitive
-  erosion, and flagged source lines.
-- Persistent macOS service installation and optional Tailscale Serve integration.
+Strata's Python recorder and server measured across two commits.
 
-See [the skill](skills/slop-check/SKILL.md),
-[commit recording](skills/slop-check/references/commit-hook.md), and
-[dashboard usage](skills/slop-check/references/dashboard.md) for setup.
+[![Commit source with syntax highlighting and complexity hotspots](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
 
-## Local skill setup
+The source window shades function ranges by the selected metric. Exact flagged-line
+locations are available for measurements recorded with line details.
 
-In the current workspace, `../claude-code-config/claude/skills/slop-check` points
-here through a relative symlink. Existing agent skill links resolve through that
-path. Keep these two repositories as siblings when using this configuration.
-Installed hooks and servers use their own runtime copies; moving the source does
-not upgrade those installations. Metric logs stay in each analyzed repository.
+## Setup
+
+Requires Git, Python 3.10+, and [uv](https://docs.astral.sh/uv/). The recorder and dashboard
+scripts live in `skills/slop-check/`.
+
+```sh
+git clone https://github.com/ravila4/strata.git
+cd strata
+```
+
+For a Python project with source under `src`, install the advisory commit hook and
+record an initial measurement:
+
+```sh
+python3 skills/slop-check/scripts/install_hook.py \
+  --repo /absolute/path/to/project --source-root src --language python
+python3 /absolute/path/to/project/.slop-check/record_commit.py \
+  --repo /absolute/path/to/project
+```
+
+Choose `python`, `rust`, or `javascript` and the source roots for the project being
+measured. The hook records future commits in the background. Measurements and
+runtime copies stay in that project's excluded `.slop-check/` directory.
+
+Start the live dashboard:
+
+```sh
+uv run --script skills/slop-check/scripts/serve_dashboard.py \
+  --repo /absolute/path/to/project --port 8766
+```
+
+Open <http://127.0.0.1:8766/>. The dashboard refreshes while visible. Measurements
+are advisory; they describe source structure and complexity concentration.
+
+See [commit recording](skills/slop-check/references/commit-hook.md) for source
+selection and hook behavior, and [dashboard usage](skills/slop-check/references/dashboard.md)
+for navigation, persistent macOS service setup, and Tailscale access. The
+[agent skill](skills/slop-check/SKILL.md) also supports snapshot comparisons.
+Installed hooks and services use runtime copies; reinstall them to pick up updates.
 
 ## Development
 
@@ -46,8 +74,18 @@ uv run --with playwright playwright install chromium webkit
 uv run --script skills/slop-check/tests/source_browser.py
 ```
 
-## Neovim integration
+## Credits
 
-A toggleable metric overlay is planned, but not implemented. It will reuse the
-analyzer and validate snapshot or buffer contents before applying line highlights.
-Editor scans will remain separate from committed metric history.
+[scb-check](https://github.com/gabeorlanski/scb-check), by
+[Gabriel Orlanski](https://github.com/gabeorlanski), provides Strata's metric analysis.
+Strata currently pins version 0.2.0 and adds commit recording and visualization
+around its results.
+
+[SlopCodeBench](https://github.com/SprocketLab/slop-code-bench), from SprocketLab,
+and the [SlopCodeBench paper](https://arxiv.org/abs/2603.24755) provide the research
+and metric definitions behind this project.
+
+## License
+
+Strata is licensed under the [MIT License](LICENSE). Bundled third-party assets
+retain their own licenses in [the vendor directory](skills/slop-check/assets/vendor/).
