@@ -15,9 +15,10 @@ show the selected commit's code, even when the working tree has changed.
 
 Strata's Python recorder and server measured across two commits.
 
-[![Commit source with syntax highlighting and complexity hotspots](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
+[![Commit source with syntax highlighting, complexity hotspots, and a minimap](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
 
-The source window shades function ranges by the selected metric. Exact flagged-line
+The source window shades function ranges by the selected metric. The minimap
+shows hotspots across the file and lets you jump to them. Exact flagged-line
 locations are available for measurements recorded with line details.
 
 ## Setup
