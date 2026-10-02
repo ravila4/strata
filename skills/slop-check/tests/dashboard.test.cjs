@@ -3,6 +3,59 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const app = require(path.join(__dirname, '../assets/dashboard.js'));
 
+test('repository heat scales compare all files by the selected metric',()=>{
+  const details={functions:[
+    {path:'src/a.rs',cc:12,cognitive:15,sloc:4},
+    {path:'other/b.rs',cc:30,cognitive:11,sloc:9},
+    {path:'other/c.rs',cc:10,cognitive:10,sloc:10000}
+  ]};
+  assert.deepEqual(app.repositoryHeatScales(details),{cc:30,erosion:90,cognitive:33,verbosity:1});
+});
+test('empty repository heat scales avoid inventing function hotspots',()=>{
+  assert.deepEqual(app.repositoryHeatScales({functions:[]}),{cc:0,erosion:0,cognitive:0,verbosity:1});
+  assert.deepEqual(app.repositoryHeatScales(null),{cc:0,erosion:0,cognitive:0,verbosity:1});
+});
+test('repository erosion scales apply the same threshold as line shading',()=>{
+  assert.equal(app.repositoryHeatScales({functions:[{cc:10,cognitive:10,sloc:100}]}).erosion,0);
+  const fn={cc:11,cognitive:11,sloc:4,line:1,end_line:1};
+  const scale=app.repositoryHeatScales({functions:[fn]});
+  assert.equal(scale.erosion,app.sourceHeat({functions:[fn]},1,'erosion').max);
+  assert.equal(scale.cognitive,app.sourceHeat({functions:[fn]},1,'cognitive').max);
+});
+
+test('minimap preserves indentation, token gaps, and blank lines',()=>{
+  assert.deepEqual(app.sourceMinimap('fn main() {\n    a + b;\n\n}\n'),{
+    rows:[[{start:0,length:2},{start:3,length:6},{start:10,length:1}],
+      [{start:4,length:1},{start:6,length:1},{start:8,length:2}],[],[{start:0,length:1}]],
+    columns:11
+  });
+});
+test('minimap expands tabs at four-column stops and counts Unicode characters',()=>{
+  assert.deepEqual(app.sourceMinimap(' a\tb\n\t猫 x').rows,
+    [[{start:1,length:1},{start:4,length:1}],[{start:4,length:1},{start:6,length:1}]]);
+  assert.equal(app.sourceMinimap('x'.repeat(200)).columns,160);
+  assert.deepEqual(app.sourceMinimap(''),{rows:[],columns:1});
+});
+test('minimap viewport follows scrolling and covers a short document',()=>{
+  assert.deepEqual(app.sourceMapViewport(400,200,1000,500),{top:200,height:100});
+  assert.deepEqual(app.sourceMapViewport(0,500,500,500),{top:0,height:500});
+});
+test('minimap navigation centers clicks and preserves a drag grab offset',()=>{
+  assert.equal(app.sourceMapScroll(250,50,500,1000,200),400);
+  assert.equal(app.sourceMapScroll(350,30,500,1000,200),640);
+  assert.equal(app.sourceMapScroll(-10,50,500,1000,200),0);
+  assert.equal(app.sourceMapScroll(510,50,500,1000,200),800);
+  assert.equal(app.sourceMapScroll(200,250,500,500,500),0);
+});
+test('minimap heat preserves a single-line peak when many lines share a pixel',()=>{
+  const values=Array(1000).fill(1);values[450]=30;
+  const pixels=app.sourceMapHeat(values,100,20024,12,20);
+  assert.equal(pixels.length,100);
+  assert.equal(Math.max(...pixels),30);
+  assert.equal(pixels[45],30);
+  assert.deepEqual(app.sourceMapHeat([],3,60,12,20),[0,0,0]);
+});
+
 
 
 const details = {

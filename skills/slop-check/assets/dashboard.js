@@ -181,14 +181,64 @@ function sourceHeat(source, lineCount, metric) {
       const start=Math.max(1,fn.line),end=Math.min(lineCount,fn.end_line);
       work+=Math.max(0,end-start+1);
       if(work>1000000) return {values:Array(lineCount).fill(0),max:0,available:false};
-      const value=metric==='cc'?fn.cc:metric==='erosion'?(fn.cc>10?fn.cc*Math.sqrt(fn.sloc):0):(fn.cognitive>10?fn.cognitive*Math.sqrt(fn.sloc):0);
+      const value=functionHeatValue(fn,metric);
       for(let line=start;line<=end;line++) values[line-1]=Math.max(values[line-1],value);
     }
   }
   return {values,max:values.reduce((max,value)=>Math.max(max,value),0),available:true};
 }
 
-if (typeof module !== 'undefined') module.exports = {sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+function functionHeatValue(fn,metric) {
+  return metric==='cc'?fn.cc:metric==='erosion'?(fn.cc>10?fn.cc*Math.sqrt(fn.sloc):0):(fn.cognitive>10?fn.cognitive*Math.sqrt(fn.sloc):0);
+}
+
+function repositoryHeatScales(details) {
+  const scales={cc:0,erosion:0,cognitive:0,verbosity:1};
+  for(const fn of details?.functions || []) for(const metric of ['cc','erosion','cognitive']) {
+    scales[metric]=Math.max(scales[metric],functionHeatValue(fn,metric));
+  }
+  return scales;
+}
+
+function sourceMinimap(text) {
+  const lines=text.split('\n');
+  if(lines.at(-1)==='') lines.pop();
+  let columns=1;
+  const rows=lines.map(line=>{
+    const runs=[];let column=0,run=null;
+    for(const char of line) {
+      if(/\s/u.test(char)) {
+        run=null;column+=char==='\t'?4-column%4:1;
+      } else {
+        if(!run) {run={start:column,length:0};runs.push(run);}
+        run.length++;column++;
+      }
+    }
+    columns=Math.max(columns,Math.min(160,column));
+    return runs;
+  });
+  return {rows,columns};
+}
+
+function sourceMapViewport(scrollTop,clientHeight,scrollHeight,mapHeight) {
+  return {top:scrollTop/scrollHeight*mapHeight,height:clientHeight/scrollHeight*mapHeight};
+}
+
+function sourceMapScroll(y,offset,mapHeight,scrollHeight,clientHeight) {
+  return Math.max(0,Math.min(scrollHeight-clientHeight,(y-offset)/mapHeight*scrollHeight));
+}
+
+function sourceMapHeat(values,mapHeight,scrollHeight,offset,lineHeight) {
+  const pixels=Array(Math.ceil(mapHeight)).fill(0);
+  values.forEach((value,index)=>{
+    const start=Math.floor((offset+index*lineHeight)/scrollHeight*mapHeight);
+    const end=Math.min(pixels.length,Math.ceil((offset+(index+1)*lineHeight)/scrollHeight*mapHeight));
+    for(let y=start;y<end;y++) pixels[y]=Math.max(pixels[y],value);
+  });
+  return pixels;
+}
+
+if (typeof module !== 'undefined') module.exports = {repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -330,17 +380,84 @@ if (typeof document !== 'undefined') {
   }
   let sourceResponse=null, sourceTarget=null, sourceController=null, sourceRequest=0;
   const sourceDialog=$('source-dialog');
+  const sourceScroll=sourceDialog.querySelector('.source-scroll'),minimap=$('source-minimap');
+  let sourceMap=null,sourceMapHeatValues=null,sourceScales=null,mapDrag=null;
+  function updateSourceViewport() {
+    if(!sourceMap || !sourceScroll.clientHeight) return;
+    const height=minimap.clientHeight;
+    const viewport=sourceMapViewport(sourceScroll.scrollTop,sourceScroll.clientHeight,sourceScroll.scrollHeight,height);
+    $('source-minimap-viewport').style.top=viewport.top+'px';
+    $('source-minimap-viewport').style.height=viewport.height+'px';
+    const max=sourceScroll.scrollHeight-sourceScroll.clientHeight;
+    minimap.setAttribute('aria-valuemax',String(max));
+    minimap.setAttribute('aria-valuenow',String(Math.round(sourceScroll.scrollTop)));
+    const lineHeight=parseFloat(getComputedStyle($('source-code')).lineHeight);
+    minimap.setAttribute('aria-valuetext',`Line ${Math.min(sourceMap.rows.length,Math.floor(sourceScroll.scrollTop/lineHeight)+1)} of ${sourceMap.rows.length}`);
+    minimap.setAttribute('aria-disabled',String(max===0));
+    minimap.tabIndex=max>0?0:-1;
+  }
+  function drawSourceMinimap() {
+    if(!sourceMap || !sourceMapHeatValues || !minimap.clientHeight) return;
+    const canvas=$('source-minimap-canvas'),width=minimap.clientWidth,height=minimap.clientHeight;
+    const ratio=window.devicePixelRatio || 1;
+    canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);
+    const context=canvas.getContext('2d');context.scale(ratio,ratio);
+    const gutterStyle=getComputedStyle($('source-gutter'));
+    const offset=parseFloat(gutterStyle.paddingTop),lineHeight=parseFloat(gutterStyle.lineHeight);
+    const scale=height/sourceScroll.scrollHeight;
+    const pixels=sourceMapHeat(sourceMapHeatValues.values,height,sourceScroll.scrollHeight,offset,lineHeight);
+    pixels.forEach((value,y)=>{
+      if(value>0 && sourceMapHeatValues.scaleMax>0) {context.fillStyle=`rgba(180,85,36,${.12+.38*value/sourceMapHeatValues.scaleMax})`;context.fillRect(0,y,width,1);}
+    });
+    context.fillStyle='rgba(65,66,58,.32)';
+    const columnWidth=(width-8)/sourceMap.columns;
+    sourceMap.rows.forEach((runs,index)=>{
+      const y=Math.floor((offset+index*lineHeight)*scale);
+      for(const run of runs) {
+        const length=Math.min(run.length,sourceMap.columns-run.start);
+        if(length>0) context.fillRect(4+run.start*columnWidth,y,length*columnWidth,Math.max(1,Math.min(2,lineHeight*scale)));
+      }
+    });
+    updateSourceViewport();
+  }
+  sourceScroll.addEventListener('scroll',updateSourceViewport,{passive:true});
+  new ResizeObserver(drawSourceMinimap).observe(sourceScroll);
+  function navigateSourceMap(y,offset) {
+    sourceScroll.scrollTop=sourceMapScroll(y,offset,minimap.clientHeight,sourceScroll.scrollHeight,sourceScroll.clientHeight);
+    updateSourceViewport();
+  }
+  minimap.addEventListener('pointerdown',event=>{
+    if(!sourceMap || event.button!==0 || sourceScroll.scrollHeight===sourceScroll.clientHeight) return;
+    event.preventDefault();minimap.focus();
+    const y=event.clientY-minimap.getBoundingClientRect().top;
+    const viewport=sourceMapViewport(sourceScroll.scrollTop,sourceScroll.clientHeight,sourceScroll.scrollHeight,minimap.clientHeight);
+    const offset=y>=viewport.top && y<=viewport.top+viewport.height?y-viewport.top:viewport.height/2;
+    mapDrag={pointer:event.pointerId,offset};minimap.setPointerCapture(event.pointerId);
+    navigateSourceMap(y,offset);
+  });
+  minimap.addEventListener('pointermove',event=>{
+    if(mapDrag?.pointer===event.pointerId) navigateSourceMap(event.clientY-minimap.getBoundingClientRect().top,mapDrag.offset);
+  });
+  for(const name of ['pointerup','pointercancel','lostpointercapture']) minimap.addEventListener(name,()=>{mapDrag=null;});
+  minimap.addEventListener('keydown',event=>{
+    if(!sourceMap || sourceScroll.scrollHeight===sourceScroll.clientHeight) return;
+    const lineHeight=parseFloat(getComputedStyle($('source-code')).lineHeight);
+    const positions={ArrowDown:sourceScroll.scrollTop+lineHeight,ArrowUp:sourceScroll.scrollTop-lineHeight,
+      PageDown:sourceScroll.scrollTop+sourceScroll.clientHeight,PageUp:sourceScroll.scrollTop-sourceScroll.clientHeight,
+      Home:0,End:sourceScroll.scrollHeight};
+    if(Object.hasOwn(positions,event.key)) {event.preventDefault();sourceScroll.scrollTop=positions[event.key];updateSourceViewport();}
+  });
   function recolorSource() {
     if(!sourceResponse) return;
     const metric=$('source-metric').value;
-    const lines=sourceResponse.text.split('\n');
-    if(lines.at(-1)==='') lines.pop();
-    const heat=sourceHeat(sourceResponse,lines.length,metric);
+    const heat=sourceHeat(sourceResponse,sourceMap.rows.length,metric);
+    const scaleMax=sourceScales[metric];
+    sourceMapHeatValues={...heat,scaleMax};
     const gutter=$('source-gutter');gutter.replaceChildren();
-    for(let i=0;i<lines.length;i++) {
+    for(let i=0;i<sourceMap.rows.length;i++) {
       const row=document.createElement('span');row.textContent=String(i+1);
       row.className='source-line';
-      if(heat.values[i]>0) {row.classList.add('hot');row.style.backgroundColor=`rgba(180,85,36,${.15+.65*heat.values[i]/heat.max})`;}
+      if(heat.values[i]>0 && scaleMax>0) {row.classList.add('hot');row.style.backgroundColor=`rgba(180,85,36,${.15+.65*heat.values[i]/scaleMax})`;}
       row.title=heat.available?`Line ${i+1}: ${format(heat.values[i])} ${explorerMetrics[metric].unit}`:`Line ${i+1}: locations unavailable`;
       if(sourceTarget?.line<=i+1 && i+1<=sourceTarget.end_line) row.classList.add('source-selected');
       gutter.append(row);
@@ -348,6 +465,7 @@ if (typeof document !== 'undefined') {
     $('source-legend').textContent=!heat.available
       ?(metric==='verbosity'?'Exact flagged-line locations were not recorded for this measurement.':'Heat map unavailable: function ranges exceed the preview limit.')
       :metric==='verbosity'?'Shaded gutter = flagged source line.':heat.max===0?'No function hotspots for this metric.':'';
+    drawSourceMinimap();
   }
   async function openSource(target) {
     sourceController?.abort();
@@ -356,7 +474,8 @@ if (typeof document !== 'undefined') {
     const controller=sourceController;
     const point=points[selected];
     const selection={commit:point.commit,path:target.path,scope:$('scope').value,revision:data.revision};
-    sourceTarget=target;sourceResponse=null;
+    sourceScales=repositoryHeatScales(point.details);
+    sourceTarget=target;sourceResponse=null;sourceMap=null;sourceMapHeatValues=null;mapDrag=null;minimap.hidden=true;
     $('source-title').replaceChildren();
     const segments=target.path.split('/');
     segments.forEach((segment,index)=>{
@@ -377,6 +496,7 @@ if (typeof document !== 'undefined') {
       if(request!==sourceRequest || !sourceDialog.open) return;
       if(!response.ok) throw new Error(body.error || 'Source unavailable.');
       sourceResponse=body;
+      sourceMap=sourceMinimap(body.text);minimap.hidden=sourceMap.rows.length===0;
       const code=$('source-code');code.textContent=body.text;
       const markup=sourceMarkup(body.text,body.language,window.hljs);
       if(markup!==null) code.innerHTML=markup;
@@ -397,7 +517,7 @@ if (typeof document !== 'undefined') {
   $('source-expand').onclick=()=>setSourceExpanded(!sourceDialog.classList.contains('source-expanded'));
   sourceDialog.addEventListener('close',()=>{
     setSourceExpanded(false);
-    sourceRequest++;sourceController?.abort();sourceResponse=null;
+    sourceRequest++;sourceController?.abort();sourceResponse=null;sourceMap=null;sourceMapHeatValues=null;mapDrag=null;minimap.hidden=true;
     const button=[...document.querySelectorAll('.source-button')].find(node=>node.dataset.path===sourceTarget?.path && node.dataset.line===String(sourceTarget?.line||0));
     (button || $('explorer-metric')).focus();
   });

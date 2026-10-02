@@ -74,13 +74,19 @@ data = {
     "source_available": True,
     "revision": "test-r",
 }
+point["details"]["functions"] = functions + [
+    {"path": "elsewhere/peak.rs", "name": "peak", "line": 1, "end_line": 21,
+     "cc": 30, "cognitive": 20, "sloc": 21}
+]
 html = render_dashboard(data)
 with sync_playwright() as p:
     for engine in (p.webkit, p.chromium):
         browser = engine.launch()
         for width in (320, 390, 1440):
             page = browser.new_page(
-                viewport={"width": width, "height": 900}, is_mobile=width < 600
+                viewport={"width": width, "height": 900},
+                is_mobile=width < 600,
+                has_touch=width < 600,
             )
             page.route("**/data.json", lambda r: r.fulfill(json=data))
             page.route("**/source.json?*", lambda r: r.fulfill(json=source))
@@ -108,6 +114,10 @@ with sync_playwright() as p:
             assert code_height == gutter_height == line_count * 20
             assert not page.evaluate("window.sourceInjection===true")
             assert page.locator("#source-gutter .hot").count() == 3
+            assert page.locator("#source-minimap").get_attribute("aria-disabled") == "true"
+            assert page.locator("#source-gutter .hot").first.evaluate(
+                "e=>getComputedStyle(e).backgroundColor"
+            ) == "rgba(180, 85, 36, 0.41)"
             assert page.evaluate("document.documentElement.scrollWidth") == width
             dialog = page.locator("#source-dialog")
             initial_bounds = dialog.bounding_box()
@@ -141,6 +151,72 @@ with sync_playwright() as p:
                 == "false"
             )
             page.locator("#source-close").click()
+            long_source = deepcopy(source)
+            long_source["text"] = "\n".join(
+                "" if i % 8 == 0 else "    let value = transform(input);"
+                if i % 8 > 1 else "fn transform(input: f64) {"
+                for i in range(320)
+            ) + "\n"
+            long_source["functions"].append(
+                {"line": 240, "end_line": 260, "cc": 30, "cognitive": 5, "sloc": 21}
+            )
+            short_shade = page.locator("#source-gutter .hot").first.evaluate(
+                "e=>getComputedStyle(e).backgroundColor"
+            )
+            page.route("**/source.json?*", lambda r: r.fulfill(json=long_source))
+            button.click()
+            page.wait_for_function(
+                "document.getElementById('source-gutter').children.length===320"
+            )
+            assert page.locator("#source-gutter .hot").first.evaluate(
+                "e=>getComputedStyle(e).backgroundColor"
+            ) == short_shade
+            minimap = page.locator("#source-minimap")
+            assert minimap.is_visible()
+            scroll = page.locator(".source-scroll")
+            scroll.evaluate("e=>e.scrollTop=0")
+            page.wait_for_function(
+                "document.getElementById('source-minimap').getAttribute('aria-valuenow')==='0'"
+            )
+            canvas = page.locator("#source-minimap canvas")
+            pixels = canvas.evaluate("e=>e.toDataURL()")
+            page.select_option("#source-metric", "cognitive")
+            assert canvas.evaluate("e=>e.toDataURL()") != pixels
+            bounds = minimap.bounding_box()
+            if width < 600:
+                page.touchscreen.tap(
+                    bounds["x"] + bounds["width"] / 2,
+                    bounds["y"] + bounds["height"] * .5,
+                )
+                assert scroll.evaluate("e=>e.scrollTop") > 2000
+            page.mouse.click(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] * .7)
+            assert scroll.evaluate("e=>e.scrollTop") > 3000
+            thumb = page.locator("#source-minimap-viewport").bounding_box()
+            page.mouse.move(thumb["x"] + 10, thumb["y"] + thumb["height"] / 2)
+            page.mouse.down()
+            page.mouse.move(thumb["x"] + 10, bounds["y"] + bounds["height"] * .2, steps=5)
+            page.mouse.up()
+            assert scroll.evaluate("e=>e.scrollTop") < 2000
+            page.mouse.click(bounds["x"] + 10, bounds["y"] + bounds["height"] - 1)
+            assert scroll.evaluate("e=>e.scrollTop+e.clientHeight===e.scrollHeight")
+            scroll.evaluate("e=>e.scrollTop=2000")
+            page.wait_for_function(
+                "document.getElementById('source-minimap').getAttribute('aria-valuenow')==='2000'"
+            )
+            top = page.locator("#source-minimap-viewport").evaluate(
+                "e=>parseFloat(e.style.top)"
+            )
+            assert abs(top - 2000 / scroll.evaluate("e=>e.scrollHeight") * bounds["height"]) < 1
+            minimap.focus()
+            page.keyboard.press("End")
+            assert scroll.evaluate("e=>e.scrollTop+e.clientHeight===e.scrollHeight")
+            page.keyboard.press("Home")
+            assert scroll.evaluate("e=>e.scrollTop") == 0
+            page.locator("#source-expand").click()
+            assert minimap.bounding_box()["height"] == scroll.bounding_box()["height"]
+            assert page.evaluate("document.documentElement.scrollWidth") == width
+            page.locator("#source-close").click()
+            page.route("**/source.json?*", lambda r: r.fulfill(json=source))
             page.route(
                 "**/source.json?*",
                 lambda r: r.fulfill(
@@ -178,6 +254,9 @@ with sync_playwright() as p:
                 updated["series"][0]["snapshots"][0]["details"]["functions"][0][
                     "cc"
                 ] = 2
+                updated["series"][0]["snapshots"][0]["details"]["functions"][1][
+                    "cc"
+                ] = 120
                 page.route("**/data.json", lambda r: r.fulfill(json=updated))
                 page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
                 page.wait_for_function(
@@ -188,6 +267,9 @@ with sync_playwright() as p:
                 assert "12 CC" in page.locator(
                     "#source-gutter .hot"
                 ).first.get_attribute("title")
+                assert page.locator("#source-gutter .hot").first.evaluate(
+                    "e=>getComputedStyle(e).backgroundColor"
+                ) == "rgba(180, 85, 36, 0.41)"
                 assert page.locator("#source-code").inner_text() == text
                 page.locator("#source-close").click()
             print(
