@@ -1,14 +1,8 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["plotly==6.3.1"]
-# ///
-"""Generate an offline dashboard from recorded commit measurements."""
+"""Load recorded commit measurements and render the live dashboard."""
 
-import argparse
 import fcntl
 import json
 import re
-import tempfile
 from pathlib import Path
 
 from plotly.offline import get_plotlyjs
@@ -35,23 +29,36 @@ def read_history(output: Path) -> list[dict]:
         return [json.loads(line) for line in stream if line.strip()]
 
 
-def load_dataset(repo: Path, output: Path, head: str | None = None) -> dict:
-    """Keep scopes separate and follow the current first-parent history."""
+def load_dataset(
+    repo: Path, output: Path, head: str | None = None, commits: list[str] | None = None
+) -> dict:
+    """Keep scopes separate within selected commits or first-parent history."""
     output = output.resolve()
-    head = head or git(repo, "rev-parse", "HEAD").decode().strip()
+    head = (
+        commits[-1]
+        if commits
+        else head or git(repo, "rev-parse", "HEAD").decode().strip()
+    )
     metadata = {}
-    for line in (
-        git(
-            repo,
-            "log",
-            "--first-parent",
-            "--reverse",
-            "--format=%H%x00%cI%x00%s",
-            head,
+    if commits:
+        lines = [
+            git(repo, "show", "-s", "--format=%H%x00%cI%x00%s", commit).decode().strip()
+            for commit in commits
+        ]
+    else:
+        lines = (
+            git(
+                repo,
+                "log",
+                "--first-parent",
+                "--reverse",
+                "--format=%H%x00%cI%x00%s",
+                head,
+            )
+            .decode()
+            .splitlines()
         )
-        .decode()
-        .splitlines()
-    ):
+    for line in lines:
         commit, date, subject = line.split("\x00", 2)
         metadata[commit] = {"date": date, "subject": subject, "order": len(metadata)}
     rows = read_history(output)
@@ -115,16 +122,18 @@ def load_dataset(repo: Path, output: Path, head: str | None = None) -> dict:
         series.append(scope)
     return {
         "repository": repo.name,
+        "repository_path": str(repo.resolve()),
         "series": series,
         "events": events,
         "warnings": list(dict.fromkeys(warnings)),
         "excluded": excluded,
         "head": head,
+        "requested_commits": commits or [],
     }
 
 
 def render_dashboard(data: dict) -> str:
-    """Embed the chart library and data for offline viewing."""
+    """Embed local dashboard assets and the initial dataset."""
     assets = Path(__file__).resolve().parents[1] / "assets"
     template = (assets / "dashboard.html").read_text()
     replacements = {
@@ -139,31 +148,3 @@ def render_dashboard(data: dict) -> str:
         lambda match: replacements[match.group()],
         template,
     )
-
-
-def write_dashboard(data: dict, output: Path) -> Path:
-    """Publish one self-contained HTML file after loading a consistent snapshot."""
-    html = render_dashboard(data)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=output.parent, delete=False
-    ) as stream:
-        stream.write(html)
-        temporary = Path(stream.name)
-    temporary.replace(output)
-    return output
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--output", type=Path)
-    args = parser.parse_args()
-    repo = args.repo.resolve()
-    destination = args.output or repo / ".slop-check/dashboard.html"
-    data = load_dataset(repo, repo / ".slop-check")
-    print(write_dashboard(data, destination))
-
-
-if __name__ == "__main__":
-    main()

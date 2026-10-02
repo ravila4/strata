@@ -202,6 +202,154 @@ def test_record_can_measure_a_fixed_commit_after_head_changes(repo):
     assert json.loads((output / "history.jsonl").read_text())["commit"] == original
 
 
+def test_recorder_cli_measures_revision_without_installing_hooks(repo):
+    commit = git(repo, "rev-parse", "HEAD")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "record_commit.py"),
+            "--repo",
+            str(repo),
+            "--source-root",
+            "src",
+            "--language",
+            "python",
+            "--commit",
+            "HEAD",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    row = json.loads((repo / ".slop-check/history.jsonl").read_text())
+    assert row["commit"] == commit
+    assert row["status"] == "not_applicable"
+    assert not (repo / ".slop-check/settings.json").exists()
+    assert ".slop-check/" not in git(repo, "status", "--short")
+    assert (
+        subprocess.run(
+            ["git", "-C", str(repo), "config", "--local", "--get", "core.hooksPath"],
+            capture_output=True,
+        ).returncode
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "selection", [["--source-root", "src"], ["--language", "rust"]]
+)
+def test_recorder_cli_rejects_incomplete_selection(repo, selection):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "record_commit.py"),
+            "--repo",
+            str(repo),
+            *selection,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "--source-root and --language must be supplied together" in result.stderr
+    assert not (repo / ".slop-check").exists()
+
+
+def test_hook_install_preserves_one_off_recording(repo):
+    output = repo / ".slop-check"
+    load("record_commit").record(repo, output, ["src"], "python", "/missing/uv")
+    history = (output / "history.jsonl").read_bytes()
+    load("install_hook").install(repo, ["src"], "python")
+    assert (output / "history.jsonl").read_bytes() == history
+    assert git(repo, "config", "--local", "core.hooksPath") == str(output / "hooks")
+
+
+def test_hook_install_preserves_recording_with_server_logs(repo):
+    output = repo / ".slop-check"
+    load("record_commit").record(repo, output, ["src"], "python", "/missing/uv")
+    history = (output / "history.jsonl").read_bytes()
+    for name in ("server.stdout.log", "server.stderr.log"):
+        (output / name).write_text("server output\n")
+    load("install_hook").install(repo, ["src"], "python")
+    assert (output / "history.jsonl").read_bytes() == history
+    for name in ("server.stdout.log", "server.stderr.log"):
+        assert (output / name).read_text() == "server output\n"
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+def test_hook_install_rejects_nonregular_server_logs(repo, kind):
+    output = repo / ".slop-check"
+    load("record_commit").record(repo, output, ["src"], "python", "/missing/uv")
+    log = output / "server.stderr.log"
+    if kind == "directory":
+        log.mkdir()
+    else:
+        log.symlink_to(output / "history.jsonl")
+    with pytest.raises(ValueError, match="not owned"):
+        load("install_hook").install(repo, ["src"], "python")
+
+
+@pytest.mark.parametrize("root", ["", "/src", "../src"])
+def test_recorder_cli_rejects_roots_outside_repository(repo, root):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "record_commit.py"),
+            "--repo",
+            str(repo),
+            "--source-root",
+            root,
+            "--language",
+            "python",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "Source roots must be relative paths" in result.stderr
+    assert not (repo / ".slop-check").exists()
+
+
+def test_recorder_cli_requires_uvx_before_recording(repo):
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "record_commit.py"),
+            "--repo",
+            str(repo),
+            "--source-root",
+            "src",
+            "--language",
+            "python",
+        ],
+        env=os.environ | {"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "uvx is required" in result.stderr
+    assert not (repo / ".slop-check").exists()
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "foreign", "invalid", "symlink"])
+def test_hook_install_rejects_unowned_recording_directory(repo, mutation):
+    output = repo / ".slop-check"
+    load("record_commit").record(repo, output, ["src"], "python", "/missing/uv")
+    history = output / "history.jsonl"
+    if mutation == "unknown":
+        (output / "unrelated.txt").write_text("keep")
+    elif mutation == "foreign":
+        row = json.loads(history.read_text())
+        history.write_text(json.dumps(row | {"repository": "/elsewhere"}) + "\n")
+    elif mutation == "invalid":
+        history.write_text("invalid\n")
+    else:
+        history.rename(output / "saved")
+        history.symlink_to(output / "saved")
+    with pytest.raises(ValueError, match="not owned"):
+        load("install_hook").install(repo, ["src"], "python")
+
+
 def wait_for(predicate, seconds=10):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:

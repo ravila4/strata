@@ -8,7 +8,7 @@ from copy import deepcopy
 from playwright.sync_api import sync_playwright
 from test_hooks import load
 
-render_dashboard = load("generate_dashboard").render_dashboard
+render_dashboard = load("dashboard").render_dashboard
 text = '// <img src=x onerror="window.sourceInjection=true">\nfn example() {\n    let text = "multi\\nline";\n}\n'
 commit = "a" * 40
 functions = [

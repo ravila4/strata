@@ -177,7 +177,7 @@ def test_dataset_deduplicates_measurements_in_commit_order(repo):
         row(first, "reports/new", "2026-10-02"),
     ]
     (output / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    data = load("generate_dashboard").load_dataset(repo, output)
+    data = load("dashboard").load_dataset(repo, output)
     assert [r["commit"] for r in data["series"][0]["snapshots"]] == [first, second]
     assert data["series"][0]["snapshots"][0]["report"] == "reports/new"
     assert data["series"][0]["snapshots"][0]["details"] is None
@@ -193,7 +193,7 @@ def test_dataset_separates_measurement_policies(repo):
         )
         + "\n"
     )
-    assert len(load("generate_dashboard").load_dataset(repo, output)["series"]) == 2
+    assert len(load("dashboard").load_dataset(repo, output)["series"]) == 2
 
 
 def test_unsafe_detail_reference_is_not_read(repo):
@@ -202,13 +202,13 @@ def test_unsafe_detail_reference_is_not_read(repo):
     record = row(git(repo, "rev-parse", "HEAD"), "../outside", "2026-10-02")
     record["details"] = "../outside/details.json"
     (output / "history.jsonl").write_text(json.dumps(record) + "\n")
-    data = load("generate_dashboard").load_dataset(repo, output)
+    data = load("dashboard").load_dataset(repo, output)
     assert data["series"][0]["snapshots"][0]["details"] is None
     assert data["warnings"]
 
 
 def test_json_embedding_cannot_close_script():
-    encoded = load("generate_dashboard").embed_json(
+    encoded = load("dashboard").embed_json(
         {"name": "</script><script>alert(1)</script>"}
     )
     assert "<" not in encoded
@@ -242,7 +242,7 @@ def test_file_verbosity_totals_match_aggregate():
 @pytest.mark.parametrize("marker", ["__APP__", "__DATA__", "__PLOTLY__"])
 def test_dashboard_preserves_template_markers_in_data(marker):
     data = {"repository": marker, "series": [], "subject": marker}
-    html = load("generate_dashboard").render_dashboard(data)
+    html = load("dashboard").render_dashboard(data)
     embedded = html.split('<script id="data" type="application/json">', 1)[1].split(
         "</script>", 1
     )[0]

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -311,16 +312,47 @@ def record(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--source-root", action="append")
+    parser.add_argument("--language", choices=list(EXTENSIONS))
+    parser.add_argument("--commit", default="HEAD")
     args = parser.parse_args()
-    output = args.repo.resolve() / ".slop-check"
-    settings = json.loads((output / "settings.json").read_text())
-    record(
-        args.repo.resolve(),
-        output,
-        settings["source_roots"],
-        settings["language"],
-        settings["uvx"],
+    if bool(args.source_root) != bool(args.language):
+        parser.error("--source-root and --language must be supplied together")
+    repo = Path(
+        git(args.repo.resolve(), "rev-parse", "--show-toplevel").decode().strip()
     )
+    commit = (
+        git(repo, "rev-parse", "--verify", f"{args.commit}^{{commit}}").decode().strip()
+    )
+    output = repo / ".slop-check"
+    if args.source_root:
+        for root in args.source_root:
+            if not root or Path(root).is_absolute() or ".." in Path(root).parts:
+                parser.error(
+                    "Source roots must be relative paths within the repository"
+                )
+        uvx = shutil.which("uvx")
+        if uvx is None:
+            parser.error("uvx is required; install uv before recording")
+        roots, language = args.source_root, args.language
+    else:
+        settings = json.loads((output / "settings.json").read_text())
+        roots, language, uvx = (
+            settings["source_roots"],
+            settings["language"],
+            settings["uvx"],
+        )
+    exclude = Path(
+        git(repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+        .decode()
+        .strip()
+    )
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    current = exclude.read_text() if exclude.exists() else ""
+    if "/.slop-check/" not in current.splitlines():
+        with exclude.open("a") as stream:
+            stream.write("\n/.slop-check/\n")
+    record(repo, output, roots, language, uvx, commit=commit)
 
 
 if __name__ == "__main__":

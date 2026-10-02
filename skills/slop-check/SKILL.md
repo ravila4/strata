@@ -19,10 +19,12 @@ check do not authorize hook installation.
 
 ## Code evolution dashboard
 
-For requested plots or a live dashboard, use
-[references/dashboard.md](references/dashboard.md). Generate a self-contained HTML
-snapshot on demand, or serve it with automatic refresh. Persistent macOS and
-Tailscale setup require a user request for those modes. Group hotspots by recorded
+Use the live dashboard as the default visual deliverable for metric checks and
+comparisons. Follow [references/dashboard.md](references/dashboard.md) to record
+the selected commits without installing hooks, start or reuse a server for the
+verified repository and requested revisions, and return its working URL. Keep raw measurement artifacts
+alongside the dashboard. Persistent macOS and Tailscale setup require a user
+request for those modes. Group hotspots by recorded
 source roots and the directory hierarchy. Keep the absolute complexity timeline
 linked to the open directory or selected file.
 
@@ -151,6 +153,15 @@ Follow with a short list of reviewed findings in changed code, their locations,
 and reasons to act or retain the code. Link raw artifacts and the rerun command.
 State excluded languages, incomplete stages, and other material limitations.
 Keep correctness/test results separate from these measurements.
+
+Lead the delivery with the verified live dashboard URL and the observed change.
+Keep the comparison table and reviewed findings in the reply. Recorder snapshots
+retain inline tests; label that scope separately from the production-only PR
+comparison above. Serve a PR comparison with `--commit <base-hash> --commit
+<head-hash>` so the dashboard shows the requested snapshots while the checkout
+stays on its current branch. Verify `requested_commits` in `/data.json` before
+reusing a server or returning its URL. Ordinary history serving omits these
+flags and follows checkout HEAD.
 
 Return the report locally. Invoking this skill does not authorize source edits,
 posting PR comments, or adding CI gates. Install a local advisory hook only when

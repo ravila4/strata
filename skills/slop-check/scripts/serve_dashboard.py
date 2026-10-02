@@ -15,15 +15,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from generate_dashboard import load_dataset, render_dashboard
+from dashboard import load_dataset, render_dashboard
 from record_commit import git
 
 
 class DatasetCache:
     """Serialize cache refreshes and publish only successful dataset reads."""
 
-    def __init__(self, repo: Path) -> None:
+    def __init__(self, repo: Path, commits: list[str] | None = None) -> None:
         self.repo = repo
+        self.commits = list(
+            dict.fromkeys(
+                git(
+                    repo,
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    f"{ref}^{{commit}}",
+                )
+                .decode()
+                .strip()
+                for ref in commits or []
+            )
+        )
         self.output = repo / ".slop-check"
         self.lock = threading.Lock()
         self.key = None
@@ -32,7 +46,11 @@ class DatasetCache:
 
     def snapshot(self) -> tuple[bytes, str]:
         with self.lock:
-            head = git(self.repo, "rev-parse", "HEAD").decode().strip()
+            head = (
+                self.commits[-1]
+                if self.commits
+                else git(self.repo, "rev-parse", "HEAD").decode().strip()
+            )
             stamps = []
             for name in ("history.jsonl", "queue.json"):
                 path = self.output / name
@@ -41,9 +59,11 @@ class DatasetCache:
                     if path.exists()
                     else None
                 )
-            key = (head, stamps)
+            key = (head, self.commits, stamps)
             if key != self.key:
-                data = load_dataset(self.repo, self.output, head=head)
+                data = load_dataset(
+                    self.repo, self.output, head=head, commits=self.commits
+                )
                 queue_path = self.output / "queue.json"
                 data["recording"] = (
                     json.loads(queue_path.read_text())
@@ -148,9 +168,11 @@ def read_source(repo: Path, data: dict, query: str) -> dict:
     return result
 
 
-def make_server(repo: Path, port: int) -> ThreadingHTTPServer:
+def make_server(
+    repo: Path, port: int, commits: list[str] | None = None
+) -> ThreadingHTTPServer:
     """Serve dashboard data and recorded Git source without filesystem routes."""
-    cache = DatasetCache(repo)
+    cache = DatasetCache(repo, commits=commits)
     body, _ = cache.snapshot()
     html = render_dashboard(json.loads(body)).encode()
 
@@ -234,8 +256,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument(
+        "--commit",
+        action="append",
+        help="Show only these revisions in the supplied order; repeat for a comparison",
+    )
     args = parser.parse_args()
-    with make_server(args.repo.resolve(), args.port) as server:
+    with make_server(args.repo.resolve(), args.port, commits=args.commit) as server:
         print(
             f"Dashboard listening on http://127.0.0.1:{server.server_port}/", flush=True
         )

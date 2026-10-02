@@ -2,6 +2,8 @@
 
 Use this mode when the user asks to record SlopCodeBench metrics automatically
 in a repository. It supports macOS and Linux with Python 3.10+, Git, and `uvx`.
+For one-off measurements without hooks, use the
+[live dashboard workflow](dashboard.md#record-without-installing-a-hook).
 Install from the primary checkout; linked worktrees share hook configuration,
 so installation from a linked worktree is rejected. Commits made in linked
 worktrees use the primary checkout's recorder and shared history.
@@ -26,6 +28,9 @@ resource lookup. An existing post-commit hook runs before the recorder. Global
 Git settings and tracked repository files are not changed. Reinstallation
 updates the recorder and selection while retaining the original hook settings;
 it refuses to proceed if the active hook configuration has changed.
+Installation also preserves one-off measurements and regular
+`server.stdout.log`/`server.stderr.log` files in `.slop-check/`. Unexpected files
+or symlinks are rejected rather than overwritten.
 
 The post-commit hook captures the committing checkout and full SHA, queues the
 job, launches a detached worker, and exits zero. One analysis runs at a time.

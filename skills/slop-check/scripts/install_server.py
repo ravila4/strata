@@ -86,7 +86,7 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
     staging = Path(tempfile.mkdtemp(prefix="dashboard-stage-", dir=output))
     scripts = staging / "scripts"
     scripts.mkdir(parents=True, exist_ok=True)
-    for name in ("serve_dashboard.py", "generate_dashboard.py", "record_commit.py"):
+    for name in ("serve_dashboard.py", "dashboard.py", "record_commit.py"):
         shutil.copyfile(Path(__file__).with_name(name), scripts / name)
     shutil.copytree(
         Path(__file__).resolve().parents[1] / "assets",

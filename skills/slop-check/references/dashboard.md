@@ -1,19 +1,53 @@
 # Code evolution dashboard
 
-Use this mode when the user requests plots of recorded code metrics. The dashboard
-reads the local commit recorder's `.slop-check/history.jsonl`; it does not analyze
-or backfill historical commits. Install the hook first to collect new snapshots.
+Use the live dashboard for metric checks, comparisons, and recorded history. It
+reads `.slop-check/history.jsonl`; record the selected commits before serving.
 Run commands from this skill's directory, replacing repository paths below.
 
-## Generate an offline dashboard
+## Record without installing a hook
 
 ```sh
-uv run --script scripts/generate_dashboard.py --repo /absolute/path/to/repo
+python3 scripts/record_commit.py --repo /absolute/path/to/repo \
+  --source-root src --language python --commit HEAD
 ```
 
-This writes `.slop-check/dashboard.html` atomically. Plotly is embedded, so the
-result opens offline with no CDN. The first generation installs the pinned
-Plotly dependency through uv. The file remains a snapshot until regenerated.
+Choose explicit relative source roots and one of `python`, `rust`, or
+`javascript`. Repeat `--source-root` for multiple roots. For comparisons, run the
+command once for each resolved base/head revision with the same selection. The
+recorder resolves revisions to full commit hashes and retains inline tests;
+keep this scope distinct from a production-only PR report. Inspect each accepted
+history row and its diagnostics. Failed or empty measurements are not zero scores.
+This command excludes `.slop-check/` locally and leaves hooks unchanged. Existing
+hook installations can omit selection arguments to use their saved settings.
+
+## Start or reuse the live dashboard
+
+```sh
+uv run --script scripts/serve_dashboard.py --repo /absolute/path/to/repo --port 8766
+```
+
+For a comparison, add `--commit <base-hash> --commit <head-hash>` to that command.
+The server displays only those commits, in the supplied order, without changing
+the checkout. References resolve once at startup; aliases for the same commit
+are combined. New recordings refresh the measurements, while the selected
+hashes stay fixed. Restart with new hashes to review an updated PR.
+
+Run the server in a background session that remains alive after the reply, retain
+its session or process identifier, save logs as `.slop-check/server.stdout.log`
+and `.slop-check/server.stderr.log`, and return `http://127.0.0.1:8766/`.
+Verify that `/` responds and `/data.json` has `repository_path` matching the
+canonical repository path and the intended measurements. For a comparison,
+`requested_commits` must match the ordered resolved hashes and `head` must match
+the last selected hash. For history serving, `requested_commits` must be empty
+and `head` must match checkout HEAD.
+Reuse a server only after those checks. If the port belongs to another process,
+choose a free port and report its URL. A server that failed to start is not a
+deliverable. Local serving does not require a login service or Tailscale.
+
+Plotly and syntax highlighting are bundled locally; no CDN is required.
+The first launch installs the pinned Plotly dependency through uv.
+
+## Explore the measurements
 
 The plots show source lines, cyclomatic and cognitive erosion, function complexity
 median/90th percentile/maximum, verbosity, flagged source lines, and scan duration. Counts are integers; displayed
@@ -64,27 +98,23 @@ use stacked columns; consecutive measurements use stacked areas. Known absent
 paths reset the snapshot selection to all selected source. Each timeline segment
 retains zero values for paths absent from earlier or later complete snapshots.
 
-Default ordering follows HEAD's first-parent Git history. Date view uses UTC and sorts by
+History serving follows HEAD's first-parent Git history. Comparison serving uses
+the supplied commit order, including commits outside that history. Date view uses UTC and sorts by
 commit timestamp, which can differ from ancestry. Measurements outside that
-history are omitted. Different analyzer versions, languages, roots, and inclusion
+history are omitted in history mode; comparison mode includes only the requested
+hashes. Different analyzer versions, languages, roots, and inclusion
 policies appear as separate scopes. Repeated measurements use the latest accepted
 attempt for each commit within a scope. Missing detail artifacts leave aggregate
 metrics visible and create gaps in hotspot/distribution plots. One measured
 commit is a baseline, not an observed trend. Directory renames can move bands
 without changing complexity.
 
-## Serve with automatic refresh
-
-```sh
-uv run --script scripts/serve_dashboard.py --repo /absolute/path/to/repo --port 8766
-```
-
-Open `http://127.0.0.1:8766/`. The server exposes the dashboard, `/data.json`, and
+The server exposes the dashboard, `/data.json`, and
 `/source.json` for files admitted by the recorded measurement. It binds to loopback. While visible, the page
 checks every five seconds using conditional requests, pauses while hidden, and
 checks immediately on return. Refresh retains the chosen scope, older snapshot,
 and directory/file selection when they remain available. A view at the latest
-snapshot follows new measurements. An unmeasured branch clears old metrics.
+snapshot follows new measurements. In history mode, an unmeasured branch clears old metrics.
 Errors show an explicit unavailable status and retain the last received view.
 
 ### View source and hotspots
@@ -105,7 +135,6 @@ file; overlapping ranges use the highest score. Verbosity marks the exact union
 of flagged source lines. Measurements recorded without line locations display
 an unavailable notice for that metric; they do not infer locations from counts.
 
-Source windows require the live server. Offline exports omit source buttons.
 Files over 256 KiB or 10,000 lines, binary content, and unavailable Git objects
 cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
 text with the metric gutter. Excessive highlighting markup also uses plain text.
@@ -113,7 +142,9 @@ If the measurement changes before a source request arrives, refresh and reopen
 it. Installed recorder and server copies must be upgraded to record line
 locations and serve source windows.
 
-The server refreshes its dataset when HEAD, history, or queue state changes.
+The server refreshes its dataset when history or queue state changes. History
+mode also follows changes to checkout HEAD; comparisons retain their selected
+commits.
 If you repair or remove report artifacts without changing those inputs, restart
 it to reload them. Shut down the foreground server with Ctrl-C.
 
@@ -156,7 +187,7 @@ It retains recorded history and reports. Server diagnostics are in
 
 ## Verification
 
-Generate the first dashboard and inspect it at desktop and phone widths. Confirm
+Start the dashboard and inspect it at desktop and phone widths. Confirm
 metric totals against the accepted analyzer report and preserve missing-data gaps.
 For live serving, verify the loopback endpoint, mounted Tailscale URL with and
 without its trailing slash, automatic refresh, and rejection of arbitrary file

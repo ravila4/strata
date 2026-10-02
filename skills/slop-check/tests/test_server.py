@@ -32,6 +32,69 @@ def fetch(url, headers=None):
     )
 
 
+def test_comparison_serves_feature_commits_without_changing_checkout(repo):
+    module = importlib.import_module("serve_dashboard")
+    base = record_source(repo)
+    history = repo / ".slop-check/history.jsonl"
+    base_row = history.read_text()
+    branch = test_hooks.git(repo, "branch", "--show-current")
+    test_hooks.git(repo, "checkout", "-qb", "feature")
+    (repo / "src/main.rs").write_text('fn main() { println!("feature"); }\n')
+    test_hooks.git(repo, "add", "src/main.rs")
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "feature")
+    feature = record_source(repo)
+    history.write_text(base_row + history.read_text())
+    test_hooks.git(repo, "checkout", "-q", branch)
+    server = module.make_server(repo, 0, commits=["HEAD", "feature"])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = "http://127.0.0.1:" + str(server.server_port)
+    try:
+        with fetch(url + "/data.json") as response:
+            data = json.load(response)
+        assert data["requested_commits"] == [base, feature]
+        assert [p["commit"] for p in data["series"][0]["snapshots"]] == [base, feature]
+        with fetch(source_url(url)) as response:
+            assert "feature" in json.load(response)["text"]
+        assert test_hooks.git(repo, "rev-parse", "HEAD") == base
+        test_hooks.git(
+            repo,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "main change",
+        )
+        test_hooks.git(repo, "update-ref", "refs/heads/feature", base)
+        history.write_text(base_row)
+        with fetch(url + "/data.json") as response:
+            refreshed = json.load(response)
+        assert refreshed["requested_commits"] == [base, feature]
+        assert refreshed["head"] == feature
+        assert refreshed["revision"] != data["revision"]
+        assert [p["commit"] for p in refreshed["series"][0]["snapshots"]] == [base]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def test_comparison_deduplicates_commit_aliases(repo):
+    module = importlib.import_module("serve_dashboard")
+    commit = test_hooks.git(repo, "rev-parse", "HEAD")
+    body, _ = module.DatasetCache(repo, commits=["HEAD", commit]).snapshot()
+    assert json.loads(body)["requested_commits"] == [commit]
+
+
+@pytest.mark.parametrize("revision", ["missing", "--all"])
+def test_comparison_rejects_invalid_commit_references(repo, revision):
+    with pytest.raises(subprocess.CalledProcessError):
+        importlib.import_module("serve_dashboard").DatasetCache(
+            repo, commits=[revision]
+        )
+
+
 def test_server_serves_only_dashboard_and_metrics(server):
     url, repo = server
     with fetch(url + "/") as response:
@@ -48,6 +111,7 @@ def test_new_history_row_refreshes_dataset(server):
     url, repo = server
     with fetch(url + "/data.json") as response:
         original = json.load(response)
+    assert original["repository_path"] == str(repo.resolve())
     output = repo / ".slop-check"
     output.mkdir(exist_ok=True)
     row = {

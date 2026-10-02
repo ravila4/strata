@@ -36,9 +36,34 @@ def install(repo: Path, roots: list[str], language: str) -> None:
     hooks = output / "hooks"
     settings_path = output / "settings.json"
     if output.exists() and not settings_path.exists():
-        raise ValueError(
-            "Existing .slop-check directory is not owned by this installer"
-        )
+        history = output / "history.jsonl"
+        reports = output / "reports"
+        try:
+            names = {p.name for p in output.iterdir()}
+            logs = {"server.stdout.log", "server.stderr.log"}
+            owned = (
+                not output.is_symlink()
+                and {"history.jsonl", "reports"} <= names
+                and names <= {"history.jsonl", "reports"} | logs
+                and all(
+                    (output / name).is_file() and not (output / name).is_symlink()
+                    for name in names & logs
+                )
+                and history.is_file()
+                and not history.is_symlink()
+                and reports.is_dir()
+                and not reports.is_symlink()
+                and all(
+                    Path(json.loads(line)["repository"]).resolve() == repo
+                    for line in history.read_text().splitlines()
+                )
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            owned = False
+        if not owned:
+            raise ValueError(
+                "Existing .slop-check directory is not owned by this installer"
+            )
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
         if git(
