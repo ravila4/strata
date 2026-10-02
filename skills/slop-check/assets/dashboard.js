@@ -157,7 +157,38 @@ function dateAxis(points) {
   return {...axis,tickformat:firstDate.slice(0,4)!==lastDate.slice(0,4)?'%b %d<br>%Y':'%b %d'};
 }
 
-if (typeof module !== 'undefined') module.exports = {percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+function sourceURL(href, selection) {
+  const url=dataURL(href);
+  url.pathname=url.pathname.replace(/data\.json$/, 'source.json');
+  for(const key of ['commit','path','scope','revision']) url.searchParams.set(key,selection[key]);
+  return url;
+}
+
+function sourceMarkup(text, language, highlighter) {
+  if(text.length>128000 || text.split('\n').length>4000 || !highlighter?.getLanguage(language)) return null;
+  const markup=highlighter.highlight(text,{language}).value;
+  return markup.length<=1000000 && (markup.match(/<span/g)||[]).length<=20000?markup:null;
+}
+
+function sourceHeat(source, lineCount, metric) {
+  const values=Array(lineCount).fill(0);
+  if(metric==='verbosity') {
+    if(!Array.isArray(source.flagged_lines)) return {values,max:0,available:false};
+    for(const line of source.flagged_lines) if(line>=1 && line<=lineCount) values[line-1]=1;
+  } else {
+    let work=0;
+    for(const fn of source.functions) {
+      const start=Math.max(1,fn.line),end=Math.min(lineCount,fn.end_line);
+      work+=Math.max(0,end-start+1);
+      if(work>1000000) return {values:Array(lineCount).fill(0),max:0,available:false};
+      const value=metric==='cc'?fn.cc:metric==='erosion'?(fn.cc>10?fn.cc*Math.sqrt(fn.sloc):0):(fn.cognitive>10?fn.cognitive*Math.sqrt(fn.sloc):0);
+      for(let line=start;line<=end;line++) values[line-1]=Math.max(values[line-1],value);
+    }
+  }
+  return {values,max:values.reduce((max,value)=>Math.max(max,value),0),available:true};
+}
+
+if (typeof module !== 'undefined') module.exports = {sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -297,6 +328,70 @@ if (typeof document !== 'undefined') {
     });
     $('share-empty').hidden=history.values.some(value=>value!==null);
   }
+  let sourceResponse=null, sourceTarget=null, sourceController=null, sourceRequest=0;
+  const sourceDialog=$('source-dialog');
+  function recolorSource() {
+    if(!sourceResponse) return;
+    const metric=$('source-metric').value;
+    const lines=sourceResponse.text.split('\n');
+    if(lines.at(-1)==='') lines.pop();
+    const heat=sourceHeat(sourceResponse,lines.length,metric);
+    const gutter=$('source-gutter');gutter.replaceChildren();
+    for(let i=0;i<lines.length;i++) {
+      const row=document.createElement('span');row.textContent=String(i+1);
+      row.className='source-line';
+      if(heat.values[i]>0) {row.classList.add('hot');row.style.backgroundColor=`rgba(180,85,36,${.15+.65*heat.values[i]/heat.max})`;}
+      row.title=heat.available?`Line ${i+1}: ${format(heat.values[i])} ${explorerMetrics[metric].unit}`:`Line ${i+1}: locations unavailable`;
+      if(sourceTarget?.line<=i+1 && i+1<=sourceTarget.end_line) row.classList.add('source-selected');
+      gutter.append(row);
+    }
+    $('source-legend').textContent=!heat.available
+      ?(metric==='verbosity'?'Exact flagged-line locations were not recorded for this measurement.':'Heat map unavailable: function ranges exceed the preview limit.')
+      :metric==='verbosity'?'Shaded gutter = flagged source line.':heat.max===0?'No function hotspots for this metric.':`${explorerMetrics[metric].label}: 0–${format(heat.max)} ${explorerMetrics[metric].unit}; intensity relative within this file. Overlapping ranges use the highest score.`;
+  }
+  async function openSource(target) {
+    sourceController?.abort();
+    const request=++sourceRequest;
+    sourceController=new AbortController();
+    const controller=sourceController;
+    const point=points[selected];
+    const selection={commit:point.commit,path:target.path,scope:$('scope').value,revision:data.revision};
+    sourceTarget=target;sourceResponse=null;
+    $('source-title').textContent=target.path;
+    $('source-meta').textContent=`${point.commit.slice(0,12)} · ${point.date.slice(0,10)}`;
+    $('source-status').textContent='Loading source…';
+    $('source-code').textContent='';$('source-code').className='';
+    $('source-gutter').replaceChildren();$('source-legend').textContent='';
+    $('source-metric').value=$('explorer-metric').value;
+    if(!sourceDialog.open) sourceDialog.showModal();
+    const timeout=setTimeout(()=>controller.abort(),10000);
+    try {
+      const response=await fetch(sourceURL(location.href,selection),{cache:'no-store',signal:controller.signal});
+      const body=await response.json();
+      if(request!==sourceRequest || !sourceDialog.open) return;
+      if(!response.ok) throw new Error(body.error || 'Source unavailable.');
+      sourceResponse=body;
+      const code=$('source-code');code.textContent=body.text;
+      const markup=sourceMarkup(body.text,body.language,window.hljs);
+      if(markup!==null) code.innerHTML=markup;
+      $('source-status').textContent=markup!==null?'':'Plain text shown; syntax highlighting limit reached.';
+      recolorSource();
+      const row=$('source-gutter').children[Math.max(0,(target.line||1)-1)];
+      if(row) row.scrollIntoView({block:'center'});
+    } catch(error) {
+      if(request===sourceRequest && sourceDialog.open) $('source-status').textContent=error.name==='AbortError'?'Source request timed out. Close and reopen to retry.':error.message;
+    } finally {clearTimeout(timeout);}
+  }
+  $('source-close').onclick=()=>sourceDialog.close();
+  sourceDialog.addEventListener('close',()=>{
+    sourceRequest++;sourceController?.abort();sourceResponse=null;
+    const button=[...document.querySelectorAll('.source-button')].find(node=>node.dataset.path===sourceTarget?.path && node.dataset.line===String(sourceTarget?.line||0));
+    (button || $('explorer-metric')).focus();
+  });
+  $('source-metric').onchange=()=>{
+    $('explorer-metric').value=$('source-metric').value;
+    detailsChanged();recolorSource();
+  };
   function table(id, rows) {
     const body=$(id); body.replaceChildren();
     for (const cells of rows) {
@@ -305,7 +400,16 @@ if (typeof document !== 'undefined') {
         const td=document.createElement('td');
         if (typeof cell==='object' && cell!==null) {
           const button=document.createElement('button'); button.textContent=cell.label; button.title=cell.label;
-          button.className='file-button'; button.onclick=cell.action; td.append(button);
+          button.className='file-button'; button.onclick=cell.action;
+          if(cell.action) td.append(button);
+          else {const label=document.createElement('span');label.textContent=cell.label;td.append(label);}
+          if(cell.source && data.source_available) {
+            td.classList.add('source-cell');
+            const source=document.createElement('button');source.className='source-button';source.append($('source-icon').content.cloneNode(true));
+            source.dataset.path=cell.source.path;source.dataset.line=String(cell.source.line||0);
+            source.title='View source';source.setAttribute('aria-label','View source: '+cell.label);
+            source.onclick=()=>openSource(cell.source);td.append(source);
+          }
         } else { td.textContent=String(cell); td.title=String(cell); }
         if (i) td.classList.add('numeric'); tr.append(td);
       }); body.append(tr);
@@ -367,9 +471,9 @@ if (typeof document !== 'undefined') {
     for (const fn of point.details?.functions || []) if(fileTotals[fn.path]) {fileTotals[fn.path].cc+=fn.cc; fileTotals[fn.path].cognitive+=fn.cognitive;}
     const total=Object.values(fileTotals).reduce((sum,file)=>sum+file.cc,0);
     table('files-body',Object.entries(fileTotals).sort((a,b)=>b[1].cc-a[1].cc || a[0].localeCompare(b[0])).slice(0,20).map(([path,file])=>[
-      {label:path,action:()=>chooseFile(path)},format(file.sloc),format(file.cc),total?format(100*file.cc/total)+'%':'—']));
+      {label:path,action:()=>chooseFile(path),source:{path}},format(file.sloc),format(file.cc),total?format(100*file.cc/total)+'%':'—']));
     const functions=(point.details?.functions || []).filter(fn=>included(fn.path) && (!selectedFile || fn.path===selectedFile)).sort((a,b)=>b.cc-a.cc || b.cognitive-a.cognitive);
-    table('functions-body',functions.slice(0,20).map(fn=>[`${fn.name} (${fn.path}:${fn.line})`,format(fn.cc),format(fn.cognitive),format(fn.sloc)]));
+    table('functions-body',functions.slice(0,20).map(fn=>[{label:`${fn.name} (${fn.path}:${fn.line})`,source:{path:fn.path,line:fn.line,end_line:fn.end_line}},format(fn.cc),format(fn.cognitive),format(fn.sloc)]));
     $('function-title').textContent=selectedFile?'Functions in '+selectedFile:'Functions with highest complexity';
     $('clear-file').hidden=!selectedFile;
     $('file-count').textContent=`Top ${Math.min(20,Object.keys(fileTotals).length)} of ${Object.keys(fileTotals).length} files; share within open directory`;
@@ -384,7 +488,7 @@ if (typeof document !== 'undefined') {
   $('scope').value=String(data.series.length-1);
   $('scope').onchange=()=>scopeChanged(); $('axis').onchange=()=>scopeChanged();
   $('root').onchange=()=>{sunLevel='/';selectedFile=null;detailsChanged();};
-  $('explorer-metric').onchange=()=>detailsChanged();
+  $('explorer-metric').onchange=()=>{detailsChanged();$('source-metric').value=$('explorer-metric').value;recolorSource();};
   $('snapshot').onchange=()=>selectSnapshot(Number($('snapshot').value));
   $('sunburst-reset').onclick=()=>{sunLevel='/';selectedFile=null;detailsChanged();};
   $('clear-file').onclick=()=>{selectedFile=null; detailsChanged();};

@@ -174,3 +174,47 @@ test('zero burden retains a known zero timeline and weighted Other conserves tot
  const result=app.absoluteSeries([measured],'/','',1,'erosion');
  assert.deepEqual(result.names,['b.rs','/other']);assert.deepEqual(result.values,[[36,22]]);assert.deepEqual(result.totals,[58]);
 });
+
+test('source URLs retain deployment mount and pin measurement revision',()=>{
+ const url=app.sourceURL('https://host/slop/aurene?old=1', {commit:'abc',path:'src/a b.rs',scope:2,revision:'r1'});
+ assert.equal(url.pathname,'/slop/aurene/source.json');
+ assert.deepEqual(Object.fromEntries(url.searchParams),{commit:'abc',path:'src/a b.rs',scope:'2',revision:'r1'});
+});
+test('source heat shades function ranges with maximum overlapping complexity',()=>{
+ const source={functions:[{line:2,end_line:4,cc:12,cognitive:15,sloc:4},{line:3,end_line:3,cc:3,cognitive:1,sloc:1}]};
+ assert.deepEqual(app.sourceHeat(source,5,'cc'),{values:[0,12,12,12,0],max:12,available:true});
+ assert.deepEqual(app.sourceHeat(source,5,'erosion').values,[0,24,24,24,0]);
+ assert.deepEqual(app.sourceHeat(source,5,'cognitive').values,[0,30,30,30,0]);
+});
+test('source heat uses exact flagged lines and distinguishes missing from zero',()=>{
+ assert.equal(app.sourceHeat({functions:[]},3,'verbosity').available,false);
+ assert.deepEqual(app.sourceHeat({functions:[],flagged_lines:[]},3,'verbosity'),{values:[0,0,0],max:0,available:true});
+ assert.deepEqual(app.sourceHeat({functions:[],flagged_lines:[1,3]},3,'verbosity').values,[1,0,1]);
+});
+test('source heat honors threshold and clips spans to source bounds',()=>{
+ const source={functions:[{line:1,end_line:9,cc:10,cognitive:10,sloc:4}]};
+ assert.deepEqual(app.sourceHeat(source,2,'erosion').values,[0,0]);
+ assert.deepEqual(app.sourceHeat(source,2,'cc').values,[10,10]);
+});
+test('source heat bounds overlapping span work',()=>{
+ const functions=Array.from({length:101},()=>({line:1,end_line:10000,cc:12,sloc:2}));
+ assert.equal(app.sourceHeat({functions},10000,'cc').available,false);
+});
+
+const vm=require('node:vm');
+const fs=require('node:fs');
+const highlighterContext={window:{}};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../assets/vendor/highlight.min.js'),'utf8'),highlighterContext);
+const highlighter=highlighterContext.window.hljs;
+test('syntax highlighting covers a normal large source file and escapes source markup',()=>{
+ for(const language of ['rust','python','javascript']) {
+  const source='// <img src=x onerror="alert(1)">\n'+('let value = "text";\n'.repeat(2200));
+  const markup=app.sourceMarkup(source,language,highlighter);
+  assert.ok(markup.includes('hljs-'));
+  assert.ok(!markup.includes('<img'));
+ }
+});
+test('syntax highlighting uses plain text for oversized files',()=>{
+ assert.equal(app.sourceMarkup('x'.repeat(128001),'rust',highlighter),null);
+ assert.equal(app.sourceMarkup('x\n'.repeat(4001),'rust',highlighter),null);
+});

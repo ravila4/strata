@@ -33,6 +33,11 @@ def main() -> None:
                 "path": str(path.relative_to(snapshot)),
                 "sloc": sloc,
                 "clone_loc": len(clones.get(path, frozenset())),
+                "verbosity_flagged_lines": sorted(
+                    clones.get(path, frozenset())
+                    | ast.get(path, frozenset())
+                    | structural.get(path, frozenset())
+                ),
                 "verbosity_flagged_loc": len(
                     clones.get(path, frozenset())
                     | ast.get(path, frozenset())

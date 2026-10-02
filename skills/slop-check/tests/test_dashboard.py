@@ -123,6 +123,13 @@ def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
     )
     assert json.loads(result.stdout) == json.loads(cli.stdout)
     measured = json.loads(detail_path.read_text())
+    assert measured["files"][0]["verbosity_flagged_lines"] == sorted(
+        set(measured["files"][0]["verbosity_flagged_lines"])
+    )
+    assert (
+        len(measured["files"][0]["verbosity_flagged_lines"])
+        == measured["files"][0]["verbosity_flagged_loc"]
+    )
     assert measured["functions"][0]["cc"] == 2
     assert measured["functions"][0]["path"] == path
     assert (
@@ -240,3 +247,17 @@ def test_dashboard_preserves_template_markers_in_data(marker):
         "</script>", 1
     )[0]
     assert json.loads(embedded) == data
+
+
+@pytest.mark.parametrize("lines", [[0], [True], [1, 1], [2, 1], [1.5], [1, 2]])
+def test_invalid_flagged_line_locations_are_rejected(lines):
+    measured = details()
+    measured["files"][0].update(
+        verbosity_flagged_loc=1, clone_loc=0, verbosity_flagged_lines=lines
+    )
+    with pytest.raises(ValueError, match="flagged"):
+        load("record_commit").validate_details(
+            measured,
+            aggregate() | {"verbosity_flagged_loc": 1, "clone_loc": 0},
+            ["src/main.rs"],
+        )

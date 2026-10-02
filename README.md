@@ -11,7 +11,8 @@ extracted from `ravila4/claude-code-config` at commit `4d43b9e`. Its existing
 `slop-check` commands and `.slop-check/` data directory are retained.
 
 - Advisory post-commit recording for Python, Rust, or JavaScript.
-- Offline HTML dashboard and live refresh server.
+- Live dashboard with commit-pinned source windows, syntax highlighting, and metric hotspots.
+- Offline HTML snapshot export.
 - Sunburst and historical plots for complexity, cyclomatic erosion, cognitive
   erosion, and flagged source lines.
 - Persistent macOS service installation and optional Tailscale Serve integration.
@@ -36,6 +37,13 @@ Run from this repository:
 uv run --with pytest --with plotly==6.3.1 pytest -q skills/slop-check/tests
 node --test skills/slop-check/tests/dashboard.test.cjs
 uvx ruff check skills/slop-check/scripts skills/slop-check/tests
+```
+
+Browser checks require Chromium and WebKit installed through Playwright:
+
+```sh
+uv run --with playwright playwright install chromium webkit
+uv run --script skills/slop-check/tests/source_browser.py
 ```
 
 ## Neovim integration

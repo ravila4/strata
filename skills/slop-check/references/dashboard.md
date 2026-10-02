@@ -79,13 +79,39 @@ without changing complexity.
 uv run --script scripts/serve_dashboard.py --repo /absolute/path/to/repo --port 8766
 ```
 
-Open `http://127.0.0.1:8766/`. The server exposes only the dashboard and `/data.json`,
-never arbitrary repository files. It binds to loopback. While visible, the page
+Open `http://127.0.0.1:8766/`. The server exposes the dashboard, `/data.json`, and
+`/source.json` for files admitted by the recorded measurement. It binds to loopback. While visible, the page
 checks every five seconds using conditional requests, pauses while hidden, and
 checks immediately on return. Refresh retains the chosen scope, older snapshot,
 and directory/file selection when they remain available. A view at the latest
 snapshot follows new measurements. An unmeasured branch clears old metrics.
 Errors show an explicit unavailable status and retain the last received view.
+
+### View source and hotspots
+
+Click the small code icon beside a file or function to open its source window.
+The filename still filters the dashboard. Function source buttons scroll to the
+recorded function range. Close the window with Close or Escape.
+
+Source comes from the selected Git commit, including when the working tree has
+changed. The open window stays on that commit during live refresh. Use Metric
+hotspots to change its gutter colors; this also selects the dashboard plot metric.
+Python, Rust, and JavaScript syntax highlighting is bundled locally.
+
+Complexity shades function ranges by CC. Cyclomatic and cognitive erosion shade
+functions above the corresponding complexity threshold of 10 using complexity
+multiplied by the square root of function SLOC. Intensity is relative within the
+file; overlapping ranges use the highest score. Verbosity marks the exact union
+of flagged source lines. Measurements recorded without line locations display
+an unavailable notice for that metric; they do not infer locations from counts.
+
+Source windows require the live server. Offline exports omit source buttons.
+Files over 256 KiB or 10,000 lines, binary content, and unavailable Git objects
+cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
+text with the metric gutter. Excessive highlighting markup also uses plain text.
+If the measurement changes before a source request arrives, refresh and reopen
+it. Installed recorder and server copies must be upgraded to record line
+locations and serve source windows.
 
 The server refreshes its dataset when HEAD, history, or queue state changes.
 If you repair or remove report artifacts without changing those inputs, restart

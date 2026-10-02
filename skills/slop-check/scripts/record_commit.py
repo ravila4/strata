@@ -145,6 +145,16 @@ def validate_details(details: dict, report: dict, manifest: list[str]) -> None:
     for file in files:
         if not isinstance(file["sloc"], int) or file["sloc"] < 0:
             raise ValueError("Invalid file SLOC")
+    for file in files:
+        if "verbosity_flagged_lines" in file:
+            lines = file["verbosity_flagged_lines"]
+            if (
+                not isinstance(lines, list)
+                or any(type(line) is not int or line < 1 for line in lines)
+                or lines != sorted(set(lines))
+                or len(lines) != file.get("verbosity_flagged_loc")
+            ):
+                raise ValueError("Invalid flagged line locations")
     if any("verbosity_flagged_loc" in file or "clone_loc" in file for file in files):
         for file in files:
             for key in ("verbosity_flagged_loc", "clone_loc"):

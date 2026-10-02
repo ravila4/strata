@@ -131,9 +131,13 @@ def render_dashboard(data: dict) -> str:
         "__PLOTLY__": get_plotlyjs(),
         "__DATA__": embed_json(data),
         "__APP__": (assets / "dashboard.js").read_text(),
+        "__HIGHLIGHT__": (assets / "vendor/highlight.min.js").read_text(),
+        "__SOURCE_ICON__": (assets / "vendor/code.svg").read_text(),
     }
     return re.sub(
-        r"__PLOTLY__|__DATA__|__APP__", lambda match: replacements[match.group()], template
+        r"__PLOTLY__|__DATA__|__APP__|__HIGHLIGHT__|__SOURCE_ICON__",
+        lambda match: replacements[match.group()],
+        template,
     )
 
 

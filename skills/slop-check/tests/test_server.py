@@ -219,3 +219,151 @@ def test_changing_tailnet_mode_requires_removal_first(repo, monkeypatch):
     )
     with pytest.raises(ValueError, match="Remove the existing server"):
         installer.install(repo, 8766, "/slop/test", False)
+
+
+def record_source(repo, path="src/main.rs", flagged=True):
+    import test_dashboard
+
+    output = repo / ".slop-check"
+    report = output / "reports/source"
+    report.mkdir(parents=True, exist_ok=True)
+    measured = test_dashboard.details()
+    measured["files"][0]["path"] = path
+    measured["functions"][0]["path"] = path
+    aggregate = test_dashboard.aggregate()
+    if flagged:
+        measured["files"][0].update(
+            verbosity_flagged_loc=1, clone_loc=0, verbosity_flagged_lines=[1]
+        )
+        aggregate.update(verbosity_flagged_loc=1, clone_loc=0)
+    (report / "details.json").write_text(json.dumps(measured))
+    (report / "analyzer.json").write_text(json.dumps(aggregate))
+    (report / "manifest.json").write_text(json.dumps([path]))
+    commit = test_hooks.git(repo, "rev-parse", "HEAD")
+    row = test_dashboard.row(commit, "reports/source", "2026-10-02")
+    row["details"] = "reports/source/details.json"
+    (output / "history.jsonl").write_text(json.dumps(row) + "\n")
+    return commit
+
+
+def source_url(url, **overrides):
+    from urllib.parse import urlencode
+
+    with fetch(url + "/data.json") as response:
+        data = json.load(response)
+    query = dict(
+        commit=data["head"], path="src/main.rs", scope="0", revision=data["revision"]
+    )
+    return url + "/source.json?" + urlencode(query | overrides)
+
+
+def test_live_source_reads_recorded_commit_instead_of_worktree(server):
+    url, repo = server
+    commit = record_source(repo)
+    (repo / "src/main.rs").write_text("dirty worktree\n")
+    with fetch(url + "/data.json") as response:
+        assert json.load(response)["source_available"] is True
+    with fetch(source_url(url)) as response:
+        source = json.load(response)
+    assert source["text"] == "fn main() {}\n"
+    assert source["commit"] == commit
+    assert source["language"] == "rust"
+    assert source["flagged_lines"] == [1]
+    assert source["functions"][0]["name"] == "main"
+
+
+@pytest.mark.parametrize(
+    "query,status",
+    [
+        ({"revision": "stale"}, 409),
+        ({"commit": "HEAD"}, 400),
+        ({"commit": "0" * 40}, 404),
+        ({"path": "src/tests.rs"}, 404),
+        ({"path": "../.git/config"}, 404),
+        ({"scope": "-1"}, 400),
+        ({"scope": "1"}, 404),
+        ({"scope": "0.0"}, 400),
+        ({"path": ""}, 400),
+    ],
+)
+def test_source_rejects_unauthorized_or_invalid_requests(server, query, status):
+    url, repo = server
+    record_source(repo)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        fetch(source_url(url, **query))
+    assert error.value.code == status
+    assert json.load(error.value)["error"]
+
+
+@pytest.mark.parametrize("suffix", ["", "?scope=0", "?scope=0&scope=1"])
+def test_source_requires_exact_query_fields(server, suffix):
+    url, repo = server
+    record_source(repo)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        fetch(url + "/source.json" + suffix)
+    assert error.value.code == 400
+
+
+@pytest.mark.parametrize(
+    "path,text",
+    [
+        ("src/a[1].rs", "fn literal() {}\n"),
+        ('src/a\tquote".rs', "fn odd() {}\n"),
+    ],
+)
+def test_source_uses_literal_git_paths(server, path, text):
+    url, repo = server
+    (repo / path).write_text(text)
+    test_hooks.git(repo, "add", ".")
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "literal")
+    record_source(repo, path)
+    with fetch(source_url(url, path=path)) as response:
+        assert json.load(response)["text"] == text
+
+
+@pytest.mark.parametrize(
+    "path,contents",
+    [
+        ("src/link.rs", None),
+        ("src/large.rs", b"a" * (256 * 1024 + 1)),
+        ("src/binary.rs", b"a\x00b"),
+        ("src/nonutf8.rs", b"\xff"),
+        ("src/lines.rs", b"\n" * 10001),
+    ],
+)
+def test_source_rejects_nonregular_or_unrenderable_blobs(server, path, contents):
+    url, repo = server
+    if contents is not None:
+        (repo / path).write_bytes(contents)
+        test_hooks.git(repo, "add", ".")
+        test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "blob")
+    record_source(repo, path)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        fetch(source_url(url, path=path))
+    assert error.value.code == 422
+
+
+def test_source_does_not_invent_old_flagged_locations(server):
+    url, repo = server
+    record_source(repo, flagged=False)
+    with fetch(source_url(url)) as response:
+        assert "flagged_lines" not in json.load(response)
+
+
+def test_source_rejects_unbounded_scope_number(server):
+    url, repo = server
+    record_source(repo)
+    with pytest.raises(urllib.error.HTTPError) as error:
+        fetch(source_url(url, scope="9" * 5000))
+    assert error.value.code == 400
+
+
+def test_source_returns_error_when_repository_disappears(server):
+    url, repo = server
+    record_source(repo)
+    request = source_url(url)
+    (repo / ".git").rename(repo / "removed-git")
+    with pytest.raises(urllib.error.HTTPError) as error:
+        fetch(request)
+    assert error.value.code == 503
+    assert json.load(error.value)["error"]
