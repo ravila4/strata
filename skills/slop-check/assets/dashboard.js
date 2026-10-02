@@ -229,6 +229,22 @@ function fileTableScales(rows) {
   return scales;
 }
 
+function compareMetricValues(a,b,direction) {
+  const knownA=Number.isFinite(a),knownB=Number.isFinite(b);
+  if(knownA!==knownB) return knownA?-1:1;
+  return knownA?(a-b)*(direction==='asc'?1:-1):0;
+}
+
+function sortFileRows(rows,metric,direction) {
+  return [...rows].sort((a,b)=>compareMetricValues(a[metric],b[metric],direction) || a.path.localeCompare(b.path));
+}
+
+function sortFunctionRows(rows,metric,direction) {
+  return [...rows].sort((a,b)=>compareMetricValues(a[metric],b[metric],direction)
+    || (metric==='cc'?compareMetricValues(a.cognitive,b.cognitive,'desc'):0)
+    || a.path.localeCompare(b.path) || a.line-b.line || a.name.localeCompare(b.name));
+}
+
 function sourceMinimap(text) {
   const lines=text.split('\n');
   if(lines.at(-1)==='') lines.pop();
@@ -267,7 +283,7 @@ function sourceMapHeat(values,mapHeight,scrollHeight,offset,lineHeight) {
   return pixels;
 }
 
-if (typeof module !== 'undefined') module.exports = {fileTableRows, fileTableScales, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+if (typeof module !== 'undefined') module.exports = {sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -285,6 +301,8 @@ if (typeof document !== 'undefined') {
     legend:{orientation:'h',y:1.04,yanchor:'bottom',x:0,font:{size:11}}};
   const config = {responsive:true,displaylogo:false,modeBarButtonsToRemove:['lasso2d','select2d']};
   let series, points=[], selected=0, selectedFile=null, sunLevel='/', timeline;
+  let fileSort={metric:'cc',direction:'desc'};
+  let functionSort={metric:'cc',direction:'desc'};
   let cachedDetails=null,cachedRoot=null,cachedMetrics=null;
   function currentMetrics() {
     const details=points[selected]?.details,root=$('root').value;
@@ -307,7 +325,7 @@ if (typeof document !== 'undefined') {
     $('header-meta').textContent='0';$('head-value').textContent=data.head.slice(0,8);$('timeline-target').textContent='All selected source';
     $('one-point').hidden=true;$('share-empty').hidden=false;$('details-empty').hidden=false;
     $('details-meta').textContent='';$('file-count').textContent='0 files';$('function-count').textContent='0 functions';
-    $('function-title').textContent='Functions with highest complexity';$('clear-file').hidden=true;
+    $('function-title').textContent='Functions';$('clear-file').hidden=true;
   }
   function scopeChanged(render=true) {
     series = data.series[Number($('scope').value)];
@@ -639,7 +657,7 @@ if (typeof document !== 'undefined') {
     const allFiles=fileTableRows(point.details),fileScales=fileTableScales(allFiles);
     const files=allFiles.filter(file=>included(file.path));
     const total=files.reduce((sum,file)=>sum+file.cc,0);
-    const visibleFiles=files.map(file=>({...file,share:total?file.cc/total:null})).sort((a,b)=>b.cc-a.cc || a.path.localeCompare(b.path)).slice(0,20);
+    const visibleFiles=sortFileRows(files.map(file=>({...file,share:total?file.cc/total:null})),fileSort.metric,fileSort.direction).slice(0,20);
     table('files-body',visibleFiles.map(file=>[
       {label:file.path,action:()=>chooseFile(file.path),source:{path:file.path}},format(file.sloc),format(file.cc),
       file.verbosity===null?'Unavailable':format(100*file.verbosity)+'%',file.share===null?'—':format(100*file.share)+'%']));
@@ -649,7 +667,12 @@ if (typeof document !== 'undefined') {
         if(intensity>0) $('files-body').children[index].cells[column+1].style.backgroundColor=`rgba(180,85,36,${.08+.28*intensity})`;
       });
     });
-    const functions=(point.details?.functions || []).filter(fn=>included(fn.path) && (!selectedFile || fn.path===selectedFile)).sort((a,b)=>b.cc-a.cc || b.cognitive-a.cognitive);
+    for(const button of document.querySelectorAll('[data-file-sort]')) {
+      const active=button.dataset.fileSort===fileSort.metric;
+      button.parentElement.setAttribute('aria-sort',active?(fileSort.direction==='asc'?'ascending':'descending'):'none');
+      button.querySelector('.sort-triangle').textContent=active?(fileSort.direction==='asc'?'▲':'▼'):'▼';
+    }
+    const functions=sortFunctionRows((point.details?.functions || []).filter(fn=>included(fn.path) && (!selectedFile || fn.path===selectedFile)),functionSort.metric,functionSort.direction);
     const visibleFunctions=functions.slice(0,20);
     const scales=functionTableScales(point.details?.functions || []);
     table('functions-body',visibleFunctions.map(fn=>[{label:`${fn.name} (${fn.path}:${fn.line})`,source:{path:fn.path,line:fn.line,end_line:fn.end_line}},format(fn.cc),format(fn.cognitive),format(fn.sloc)]));
@@ -659,7 +682,12 @@ if (typeof document !== 'undefined') {
         if(intensity>0) $('functions-body').children[index].cells[column+1].style.backgroundColor=`rgba(180,85,36,${.08+.28*intensity})`;
       });
     });
-    $('function-title').textContent=selectedFile?'Functions in '+selectedFile:'Functions with highest complexity';
+    for(const button of document.querySelectorAll('[data-function-sort]')) {
+      const active=button.dataset.functionSort===functionSort.metric;
+      button.parentElement.setAttribute('aria-sort',active?(functionSort.direction==='asc'?'ascending':'descending'):'none');
+      button.querySelector('.sort-triangle').textContent=active && functionSort.direction==='asc'?'▲':'▼';
+    }
+    $('function-title').textContent=selectedFile?'Functions in '+selectedFile:'Functions';
     $('clear-file').hidden=!selectedFile;
     $('file-count').textContent=`Showing ${visibleFiles.length} of ${files.length} files; share within open directory`;
     $('function-count').textContent=`Showing ${visibleFunctions.length} of ${functions.length} functions`;
@@ -677,6 +705,16 @@ if (typeof document !== 'undefined') {
   $('snapshot').onchange=()=>selectSnapshot(Number($('snapshot').value));
   $('sunburst-reset').onclick=()=>{sunLevel='/';selectedFile=null;detailsChanged();};
   $('clear-file').onclick=()=>{selectedFile=null; detailsChanged();};
+  for(const button of document.querySelectorAll('[data-file-sort]')) button.onclick=()=>{
+    const metric=button.dataset.fileSort;
+    fileSort={metric,direction:fileSort.metric===metric && fileSort.direction==='desc'?'asc':'desc'};
+    detailsChanged();
+  };
+  for(const button of document.querySelectorAll('[data-function-sort]')) button.onclick=()=>{
+    const metric=button.dataset.functionSort;
+    functionSort={metric,direction:functionSort.metric===metric && functionSort.direction==='desc'?'asc':'desc'};
+    detailsChanged();
+  };
   table('events-body',data.events.slice(-10).reverse().map(event=>[event.commit.slice(0,12),event.status,event.subject,event.timestamp]));
   $('event-count').textContent=`${data.events.length} skipped, failed, or not-applicable attempts; latest 10 shown`;
   $('warning-list').replaceChildren();

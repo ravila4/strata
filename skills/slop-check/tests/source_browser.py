@@ -96,6 +96,21 @@ with sync_playwright() as p:
                 lambda r: r.fulfill(body=html, content_type="text/html"),
             )
             page.goto("http://preview/slop/aurene/")
+            initial_file_order = page.locator("#files-body").inner_text()
+            function_cc_sort = page.locator('[data-function-sort="cc"]')
+            function_cc_sort.click(timeout=1500)
+            assert function_cc_sort.locator("..").get_attribute("aria-sort") == "ascending"
+            assert function_cc_sort.locator(".sort-triangle").inner_text() == "▲"
+            assert page.locator("#functions-body tr").first.inner_text().startswith("example (")
+            page.locator('[data-function-sort="cognitive"]').click()
+            assert page.locator("#functions-body tr").first.inner_text().startswith("peak (")
+            page.locator('[data-function-sort="sloc"]').click()
+            assert page.locator("#functions-body tr").first.inner_text().startswith("peak (")
+            function_cc_sort.click()
+            assert function_cc_sort.locator("..").get_attribute("aria-sort") == "descending"
+            assert function_cc_sort.locator(".sort-triangle").inner_text() == "▼"
+            assert page.locator("#files-body").inner_text() == initial_file_order
+            assert page.locator('[data-file-sort="cc"]').locator("..").get_attribute("aria-sort") == "descending"
             function_row = page.locator("#functions-body tr").filter(has_text="example (")
             colors = function_row.locator("td.numeric").evaluate_all(
                 "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"
@@ -115,6 +130,15 @@ with sync_playwright() as p:
             ]
             assert file_row.locator("td.numeric").nth(2).inner_text() == "0%"
             assert file_colors[3] != "rgba(0, 0, 0, 0)"
+            sloc_sort = page.locator('[data-file-sort="sloc"]')
+            sloc_sort.click()
+            assert sloc_sort.locator("..").get_attribute("aria-sort") == "descending"
+            sloc_sort.click()
+            assert sloc_sort.locator("..").get_attribute("aria-sort") == "ascending"
+            assert page.locator("#files-body tr").first.inner_text().startswith("src/example.rs")
+            page.locator('[data-file-sort="verbosity"]').click()
+            assert page.locator("#files-body tr").last.locator("td.numeric").nth(2).inner_text() == "Unavailable"
+            page.locator('[data-file-sort="cc"]').click()
             file_row.locator(".file-button").click()
             assert file_row.locator("td.numeric").evaluate_all(
                 "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"

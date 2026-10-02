@@ -3,6 +3,28 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const app = require(path.join(__dirname, '../assets/dashboard.js'));
 
+test('function sorting uses raw numeric values and keeps unavailable values last',()=>{
+  const rows=[{path:'a.rs',name:'a',line:1,cc:100,cognitive:20,sloc:10},
+    {path:'a.rs',name:'b',line:20,cc:20,cognitive:30,sloc:50},
+    {path:'a.rs',name:'c',line:30,cc:0,cognitive:null,sloc:5}];
+  assert.deepEqual(app.sortFunctionRows(rows,'cc','asc').map(r=>r.name),['c','b','a']);
+  assert.deepEqual(app.sortFunctionRows(rows,'cc','desc').map(r=>r.name),['a','b','c']);
+  assert.deepEqual(app.sortFunctionRows(rows,'cognitive','desc').map(r=>r.name),['b','a','c']);
+  assert.deepEqual(app.sortFunctionRows(rows,'cognitive','asc').map(r=>r.name),['a','b','c']);
+  assert.deepEqual(app.sortFunctionRows(rows,'sloc','desc').map(r=>r.name),['b','a','c']);
+  assert.deepEqual(rows.map(r=>r.name),['a','b','c']);
+});
+test('equal function CC retains cognitive ordering and resolves identity ties',()=>{
+  const rows=[{path:'a.rs',name:'later',line:20,cc:5,cognitive:10},
+    {path:'a.rs',name:'earlier',line:1,cc:5,cognitive:10},
+    {path:'b.rs',name:'higher',line:1,cc:5,cognitive:20}];
+  assert.deepEqual(app.sortFunctionRows(rows,'cc','desc').map(r=>r.name),['higher','earlier','later']);
+  assert.deepEqual(app.sortFunctionRows([
+    {path:'a.rs',name:'unknown',line:1,cc:5,cognitive:null},
+    {path:'z.rs',name:'known',line:1,cc:5,cognitive:0}
+  ],'cc','desc').map(r=>r.name),['known','unknown']);
+});
+
 test('file table scales use per-file CC sums and all recorded file sizes',()=>{
   assert.deepEqual(app.fileTableScales(app.fileTableRows({
     files:[{path:'src/a.rs',sloc:10,verbosity_flagged_loc:2},{path:'other/b.rs',sloc:1000}],
@@ -18,6 +40,15 @@ test('file rows distinguish missing verbosity from measured zero',()=>{
   ],functions:[]});
   assert.deepEqual(rows.map(row=>[row.path,row.cc,row.verbosity]),[['a',0,.2],['b',0,0],['c',0,null]]);
 });
+test('file sorting compares raw metrics and keeps missing values last in either direction',()=>{
+  const rows=[{path:'b',cc:100,verbosity:null},{path:'c',cc:20,verbosity:.1},{path:'a',cc:20,verbosity:.8}];
+  assert.deepEqual(app.sortFileRows(rows,'cc','desc').map(r=>r.path),['b','a','c']);
+  assert.deepEqual(app.sortFileRows(rows,'cc','asc').map(r=>r.path),['a','c','b']);
+  assert.deepEqual(app.sortFileRows(rows,'verbosity','desc').map(r=>r.path),['a','c','b']);
+  assert.deepEqual(app.sortFileRows(rows,'verbosity','asc').map(r=>r.path),['c','a','b']);
+  assert.deepEqual(rows.map(r=>r.path),['b','c','a']);
+});
+
 test('function table scales each raw metric across all recorded functions',()=>{
   assert.deepEqual(app.functionTableScales([
     {path:'src/a.rs',cc:12,cognitive:15,sloc:3},
