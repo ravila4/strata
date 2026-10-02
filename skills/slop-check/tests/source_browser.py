@@ -97,6 +97,10 @@ with sync_playwright() as p:
             button.click()
             page.wait_for_selector("#source-code .hljs-keyword")
             assert page.locator("#source-dialog").evaluate("(e)=>e.open")
+            assert page.locator("#source-title").text_content() == source["path"]
+            assert page.locator("#source-title .source-path-segment").count() == len(
+                source["path"].split("/")
+            )
             assert page.locator("#source-code").inner_text() == text
             line_count = len(text.splitlines())
             code_height = page.locator("#source-code").bounding_box()["height"]
@@ -105,6 +109,19 @@ with sync_playwright() as p:
             assert not page.evaluate("window.sourceInjection===true")
             assert page.locator("#source-gutter .hot").count() == 3
             assert page.evaluate("document.documentElement.scrollWidth") == width
+            dialog = page.locator("#source-dialog")
+            initial_bounds = dialog.bounding_box()
+            expand = page.locator("#source-expand")
+            assert expand.inner_text() == "Expand"
+            expand.click(timeout=1500)
+            assert expand.get_attribute("aria-pressed") == "true"
+            assert expand.inner_text() == "Restore"
+            bounds = dialog.bounding_box()
+            assert bounds == {"x": 0, "y": 0, "width": width, "height": 900}
+            expand.click()
+            assert expand.get_attribute("aria-pressed") == "false"
+            assert dialog.bounding_box() == initial_bounds
+            expand.click()
             page.select_option("#source-metric", "verbosity")
             assert "not recorded" in page.locator("#source-legend").inner_text()
             page.select_option("#source-metric", "erosion")
@@ -116,6 +133,13 @@ with sync_playwright() as p:
             )
             page.locator("#functions-body .source-button").first.click()
             page.wait_for_selector("#source-code .hljs-keyword")
+            assert dialog.bounding_box() == initial_bounds
+            assert (
+                page.get_by_role("button", name="Expand", exact=True).get_attribute(
+                    "aria-pressed"
+                )
+                == "false"
+            )
             page.locator("#source-close").click()
             page.route(
                 "**/source.json?*",

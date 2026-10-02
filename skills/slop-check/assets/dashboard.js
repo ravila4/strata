@@ -347,7 +347,7 @@ if (typeof document !== 'undefined') {
     }
     $('source-legend').textContent=!heat.available
       ?(metric==='verbosity'?'Exact flagged-line locations were not recorded for this measurement.':'Heat map unavailable: function ranges exceed the preview limit.')
-      :metric==='verbosity'?'Shaded gutter = flagged source line.':heat.max===0?'No function hotspots for this metric.':`${explorerMetrics[metric].label}: 0–${format(heat.max)} ${explorerMetrics[metric].unit}; intensity relative within this file. Overlapping ranges use the highest score.`;
+      :metric==='verbosity'?'Shaded gutter = flagged source line.':heat.max===0?'No function hotspots for this metric.':'';
   }
   async function openSource(target) {
     sourceController?.abort();
@@ -357,7 +357,13 @@ if (typeof document !== 'undefined') {
     const point=points[selected];
     const selection={commit:point.commit,path:target.path,scope:$('scope').value,revision:data.revision};
     sourceTarget=target;sourceResponse=null;
-    $('source-title').textContent=target.path;
+    $('source-title').replaceChildren();
+    const segments=target.path.split('/');
+    segments.forEach((segment,index)=>{
+      const part=document.createElement('span');part.className='source-path-segment';
+      part.textContent=segment+(index<segments.length-1?'/':'');
+      $('source-title').append(part);
+    });
     $('source-meta').textContent=`${point.commit.slice(0,12)} · ${point.date.slice(0,10)}`;
     $('source-status').textContent='Loading source…';
     $('source-code').textContent='';$('source-code').className='';
@@ -383,7 +389,14 @@ if (typeof document !== 'undefined') {
     } finally {clearTimeout(timeout);}
   }
   $('source-close').onclick=()=>sourceDialog.close();
+  function setSourceExpanded(expanded) {
+    sourceDialog.classList.toggle('source-expanded',expanded);
+    $('source-expand').textContent=expanded?'Restore':'Expand';
+    $('source-expand').setAttribute('aria-pressed',String(expanded));
+  }
+  $('source-expand').onclick=()=>setSourceExpanded(!sourceDialog.classList.contains('source-expanded'));
   sourceDialog.addEventListener('close',()=>{
+    setSourceExpanded(false);
     sourceRequest++;sourceController?.abort();sourceResponse=null;
     const button=[...document.querySelectorAll('.source-button')].find(node=>node.dataset.path===sourceTarget?.path && node.dataset.line===String(sourceTarget?.line||0));
     (button || $('explorer-metric')).focus();
