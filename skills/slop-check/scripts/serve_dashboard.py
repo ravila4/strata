@@ -73,6 +73,7 @@ class DatasetCache:
                 revision = hashlib.sha256(json.dumps(key).encode()).hexdigest()[:20]
                 data["revision"] = revision
                 data["source_available"] = True
+                data["source_runtime"] = str(Path(__file__).resolve().parents[1])
                 body = json.dumps(data).encode()
                 self.body, self.etag, self.key = body, f'"{revision}"', key
             return self.body, self.etag

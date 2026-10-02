@@ -1,6 +1,7 @@
 """Install or remove a persistent local dashboard server on macOS."""
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -10,7 +11,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -31,6 +31,70 @@ def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         command, capture_output=True, text=True, timeout=30, check=check
     )
+
+
+def validate_agent_ownership(repo: Path, settings: dict, plist_path: Path) -> None:
+    """Require the local configuration and launch agent to identify the same service."""
+    label = "dev.slop-check." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
+    output = repo / ".slop-check"
+    try:
+        if (
+            output.is_symlink()
+            or (output / "server-settings.json").is_symlink()
+            or plist_path.is_symlink()
+        ):
+            raise ValueError("Server ownership cannot be verified through symlinks")
+        plist = plistlib.loads(plist_path.read_bytes())
+        arguments = plist["ProgramArguments"]
+        owned = (
+            settings["label"] == label
+            and plist["Label"] == label
+            and arguments[arguments.index("--repo") + 1] == str(repo)
+            and arguments[arguments.index("--port") + 1] == str(settings["port"])
+        )
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        IndexError,
+        plistlib.InvalidFileException,
+    ) as error:
+        raise ValueError(
+            "Launch agent ownership does not match this repository"
+        ) from error
+    if not owned:
+        raise ValueError("Launch agent ownership does not match this repository")
+
+
+def wait_for_port_release(port: int, timeout: float) -> None:
+    """Allow an owned service to finish closing, rejecting surviving listeners."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.socket() as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                probe.bind(("127.0.0.1", port))
+            return
+        except OSError as error:
+            if error.errno != errno.EADDRINUSE or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
+def restore_agent(domain: str, plist_path: Path) -> None:
+    """Retry registration while launchd finishes unloading the replaced service."""
+    deadline = time.monotonic() + 5
+    command = ["launchctl", "bootstrap", domain, str(plist_path)]
+    while True:
+        result = run(command, check=False)
+        if result.returncode == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise subprocess.CalledProcessError(
+                result.returncode, command, result.stdout, result.stderr
+            )
+        time.sleep(0.1)
 
 
 def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
@@ -81,24 +145,11 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
             )
     if previous_bytes is None:
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    bundle = output / "dashboard-tool"
-    staging = Path(tempfile.mkdtemp(prefix="dashboard-stage-", dir=output))
-    scripts = staging / "scripts"
-    scripts.mkdir(parents=True, exist_ok=True)
-    for name in ("serve_dashboard.py", "dashboard.py", "record_commit.py"):
-        shutil.copyfile(Path(__file__).with_name(name), scripts / name)
-    shutil.copytree(
-        Path(__file__).resolve().parents[1] / "assets",
-        staging / "assets",
-        dirs_exist_ok=True,
-    )
-    try:
-        run([uv, "run", "--script", str(scripts / "serve_dashboard.py"), "--help"])
-    except BaseException:
-        shutil.rmtree(staging)
-        raise
-    scripts = bundle / "scripts"
+    scripts = Path(__file__).resolve().parent
+    runtime = str(scripts.parent)
+    run([uv, "run", "--script", str(scripts / "serve_dashboard.py"), "--help"])
     command = [
         uv,
         "run",
@@ -125,20 +176,18 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
         "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
     }
     previous_plist = plist_path.read_bytes() if plist_path.exists() else None
-    backup = output / "dashboard-tool.previous"
-    if backup.exists():
-        shutil.rmtree(staging)
-        raise ValueError("A previous dashboard installation backup needs inspection")
     if previous_bytes is not None:
+        validate_agent_ownership(repo, previous, plist_path)
+        registered = run(["launchctl", "print", f"{domain}/{label}"], check=False)
+        if registered.returncode != 0:
+            raise ValueError("Existing launch agent ownership could not be verified")
         run(["launchctl", "bootout", f"{domain}/{label}"], check=False)
     mount_attempted = False
-    published = False
+    launch_attempted = False
     try:
-        if bundle.exists():
-            bundle.rename(backup)
-        staging.rename(bundle)
-        published = True
+        wait_for_port_release(port, 5 if previous_bytes is not None else 0)
         plist_path.write_bytes(plistlib.dumps(plist))
+        launch_attempted = True
         run(["launchctl", "bootstrap", domain, str(plist_path)])
         deadline = time.monotonic() + 15
         while True:
@@ -146,7 +195,14 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
                 with urllib.request.urlopen(
                     proxy + "/data.json", timeout=1
                 ) as response:
-                    json.load(response)
+                    data = json.load(response)
+                if (
+                    data.get("repository_path") != str(repo)
+                    or data.get("source_runtime") != runtime
+                ):
+                    raise ValueError(
+                        "Dashboard endpoint identity does not match the repository and shared runtime"
+                    )
                 break
             except OSError:
                 if time.monotonic() > deadline:
@@ -161,6 +217,7 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
             "mount": mount,
             "tailscale": False,
             "url": url,
+            "source_runtime": runtime,
         }
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
         if tailscale:
@@ -186,13 +243,8 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
                     f"Inspect Tailscale mount {mount}; automatic cleanup could not complete",
                     file=sys.stderr,
                 )
-        run(["launchctl", "bootout", f"{domain}/{label}"], check=False)
-        if published:
-            shutil.rmtree(bundle)
-        if staging.exists():
-            shutil.rmtree(staging)
-        if backup.exists():
-            backup.rename(bundle)
+        if launch_attempted:
+            run(["launchctl", "bootout", f"{domain}/{label}"], check=False)
         if previous_bytes is None:
             settings_path.unlink(missing_ok=True)
         else:
@@ -201,10 +253,14 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
             plist_path.unlink(missing_ok=True)
         else:
             plist_path.write_bytes(previous_plist)
-            run(["launchctl", "bootstrap", domain, str(plist_path)], check=False)
+            try:
+                restore_agent(domain, plist_path)
+            except (OSError, subprocess.SubprocessError) as error:
+                print(
+                    f"Previous dashboard could not be restarted; inspect {plist_path}: {error}",
+                    file=sys.stderr,
+                )
         raise
-    if backup.exists():
-        shutil.rmtree(backup)
     print(url)
     return url
 
@@ -216,8 +272,8 @@ def remove(repo: Path) -> None:
     path = output / "server-settings.json"
     settings = json.loads(path.read_text())
     label = "dev.slop-check." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
-    if settings["label"] != label:
-        raise ValueError("Server ownership does not match this repository")
+    plist_path = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
+    validate_agent_ownership(repo, settings, plist_path)
     if settings["tailscale"]:
         tail = shutil.which("tailscale")
         if tail is None:
@@ -226,7 +282,7 @@ def remove(repo: Path) -> None:
         check_mount(config, settings["mount"], f"http://127.0.0.1:{settings['port']}")
         run([tail, "serve", "--https=443", "--set-path=" + settings["mount"], "off"])
     run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], check=False)
-    (Path.home() / "Library/LaunchAgents" / f"{label}.plist").unlink(missing_ok=True)
+    plist_path.unlink()
     path.unlink()
 
 

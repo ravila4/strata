@@ -2,7 +2,9 @@
 
 Use the live dashboard for metric checks, comparisons, and recorded history. It
 reads `.slop-check/history.jsonl`; record the selected commits before serving.
-Run commands from this skill's directory, replacing repository paths below.
+Run commands from the shared skill installation's directory, replacing
+repository paths below. Each repository keeps its own measurements and service
+configuration in `.slop-check/`; scripts and dashboard assets remain shared.
 
 ## Record without installing a hook
 
@@ -36,7 +38,8 @@ Run the server in a background session that remains alive after the reply, retai
 its session or process identifier, save logs as `.slop-check/server.stdout.log`
 and `.slop-check/server.stderr.log`, and return `http://127.0.0.1:8766/`.
 Verify that `/` responds and `/data.json` has `repository_path` matching the
-canonical repository path and the intended measurements. For a comparison,
+canonical repository path, `source_runtime` matching the resolved shared skill
+directory, and the intended measurements. For a comparison,
 `requested_commits` must match the ordered resolved hashes and `head` must match
 the last selected hash. For history serving, `requested_commits` must be empty
 and `head` must match checkout HEAD.
@@ -139,8 +142,7 @@ Files over 256 KiB or 10,000 lines, binary content, and unavailable Git objects
 cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
 text with the metric gutter. Excessive highlighting markup also uses plain text.
 If the measurement changes before a source request arrives, refresh and reopen
-it. Installed recorder and server copies must be upgraded to record line
-locations and serve source windows.
+it. Measurements must include recorded line locations for metric highlighting.
 
 The server refreshes its dataset when history or queue state changes. History
 mode also follows changes to checkout HEAD; comparisons retain their selected
@@ -157,12 +159,14 @@ python3 scripts/install_server.py --repo /absolute/path/to/repo \
   --port 8766 --mount /slop/project --tailscale
 ```
 
-This prepares dependencies, copies the dashboard runtime into the excluded
-`.slop-check/dashboard-tool/`, and installs a repository-specific user launch
-agent. It starts at login and restarts after failures. Omit `--tailscale` for a
+This prepares dependencies and installs a repository-specific user launch agent
+that runs the shared dashboard server. It saves the resolved skill directory as
+`source_runtime` in `.slop-check/server-settings.json`; `/data.json` reports the
+running server's runtime path. It starts at login and restarts after failures. Omit `--tailscale` for a
 loopback-only service. Other operating systems can use the foreground command
 with their own service manager. Change the port for additional repositories;
-the default URL mount is `/slop/<repository name>`.
+the default URL mount is `/slop/<repository name>`. Choose a distinct port and
+mount for each repository. Each service reads only its repository's measurements.
 
 Tailscale Serve adds the specified HTTPS path on port 443 and preserves other
 handlers. A conflicting handler is rejected. The installer prints the tailnet
@@ -173,7 +177,7 @@ terminal does not stop the launch agent; a sleeping or offline computer cannot
 serve updates.
 
 Reinstalling prepares dependencies before stopping the existing agent. Activation
-failures restore the previous local installation and remove a newly created
+failures restore the previous service configuration and remove a newly created
 proxy mount where cleanup succeeds. Inspect reported cleanup failures before
 retrying. Remove the service before changing its port, mount, or Tailscale mode:
 
@@ -184,6 +188,14 @@ python3 scripts/install_server.py --repo /absolute/path/to/repo --remove
 Removal targets only this repository's agent and matching owned Tailscale mount.
 It retains recorded history and reports. Server diagnostics are in
 `.slop-check/server.stdout.log` and `.slop-check/server.stderr.log`.
+
+After updating server code or dashboard assets in the shared installation,
+restart the server and reload the browser. For a persistent service, rerun the
+installation command with the same port, mount, and Tailscale mode. For a
+foreground server, stop it and run the serving command again. Automatic metric
+refresh updates measurements within the running server; it does not reload
+server code or the browser's dashboard assets. If the installation moves, rerun
+each repository's installers from its new location to update `source_runtime`.
 
 ## Verification
 
