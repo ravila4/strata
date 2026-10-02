@@ -36,13 +36,15 @@ record an initial measurement:
 ```sh
 python3 skills/slop-check/scripts/install_hook.py \
   --repo /absolute/path/to/project --source-root src --language python
-python3 /absolute/path/to/project/.slop-check/record_commit.py \
+python3 skills/slop-check/scripts/record_commit.py \
   --repo /absolute/path/to/project
 ```
 
 Choose `python`, `rust`, or `javascript` and the source roots for the project being
-measured. The hook records future commits in the background. Measurements and
-runtime copies stay in that project's excluded `.slop-check/` directory.
+measured. The hook records future commits in the background. One Strata installation
+can serve multiple projects. Application scripts and dashboard assets stay in this
+installation; each project's excluded `.slop-check/` directory holds its configuration,
+measurements, reports, queue state, logs, and minimal hook wrappers.
 
 Start the live dashboard:
 
@@ -51,14 +53,18 @@ uv run --script skills/slop-check/scripts/serve_dashboard.py \
   --repo /absolute/path/to/project --port 8766
 ```
 
-Open <http://127.0.0.1:8766/>. The dashboard refreshes while visible. Measurements
-are advisory; they describe source structure and complexity concentration.
+Open <http://127.0.0.1:8766/>. New measurements refresh automatically while the
+dashboard is visible. Use a different port for each project served at the same time.
+Measurements are advisory; they describe source structure and complexity concentration.
 
 See [commit recording](skills/slop-check/references/commit-hook.md) for source
 selection and hook behavior, and [dashboard usage](skills/slop-check/references/dashboard.md)
 for navigation, persistent macOS service setup, and Tailscale access. The
 [agent skill](skills/slop-check/SKILL.md) also supports snapshot comparisons.
-Installed hooks and services use runtime copies; reinstall them to pick up updates.
+Updates to the shared recorder apply to newly launched processes. Let active scans
+finish before replacing runtime files. After updating dashboard code or assets,
+restart the server and reload the browser. Keep Strata at its installed location;
+if you move it, rerun each project's installers from the new location.
 
 ## Development
 
