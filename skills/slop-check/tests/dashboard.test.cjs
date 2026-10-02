@@ -3,6 +3,36 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const app = require(path.join(__dirname, '../assets/dashboard.js'));
 
+test('file table scales use per-file CC sums and all recorded file sizes',()=>{
+  assert.deepEqual(app.fileTableScales(app.fileTableRows({
+    files:[{path:'src/a.rs',sloc:10,verbosity_flagged_loc:2},{path:'other/b.rs',sloc:1000}],
+    functions:[{path:'src/a.rs',cc:2},{path:'src/a.rs',cc:3},{path:'other/b.rs',cc:4},
+      {path:'missing.rs',cc:500}]
+  })),{sloc:1000,cc:5,verbosity:.2});
+  assert.deepEqual(app.fileTableScales(app.fileTableRows(null)),{sloc:0,cc:0,verbosity:0});
+  assert.deepEqual(app.fileTableScales(app.fileTableRows({files:[{path:'__proto__',sloc:1}],functions:[{path:'__proto__',cc:12}]})),{sloc:1,cc:12,verbosity:0});
+});
+test('file rows distinguish missing verbosity from measured zero',()=>{
+  const rows=app.fileTableRows({files:[
+    {path:'a',sloc:10,verbosity_flagged_loc:2},{path:'b',sloc:0,verbosity_flagged_loc:0},{path:'c',sloc:5}
+  ],functions:[]});
+  assert.deepEqual(rows.map(row=>[row.path,row.cc,row.verbosity]),[['a',0,.2],['b',0,0],['c',0,null]]);
+});
+test('function table scales each raw metric across all recorded functions',()=>{
+  assert.deepEqual(app.functionTableScales([
+    {path:'src/a.rs',cc:12,cognitive:15,sloc:3},
+    {path:'elsewhere/b.rs',cc:30,cognitive:20,sloc:21},
+    {path:'src/c.rs',cc:0,cognitive:null,sloc:5}
+  ]),{cc:30,cognitive:20,sloc:21});
+  assert.deepEqual(app.functionTableScales([]),{cc:0,cognitive:0,sloc:0});
+});
+test('table heat leaves zero and unavailable values unshaded and bounds intensity',()=>{
+  assert.equal(app.tableHeatIntensity(12,30),.4);
+  assert.equal(app.tableHeatIntensity(60,30),1);
+  for(const value of [0,-1,null,undefined,Infinity,NaN]) assert.equal(app.tableHeatIntensity(value,30),0);
+  assert.equal(app.tableHeatIntensity(12,0),0);
+});
+
 test('repository heat scales compare all files by the selected metric',()=>{
   const details={functions:[
     {path:'src/a.rs',cc:12,cognitive:15,sloc:4},

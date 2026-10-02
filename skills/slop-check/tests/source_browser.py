@@ -78,6 +78,7 @@ point["details"]["functions"] = functions + [
     {"path": "elsewhere/peak.rs", "name": "peak", "line": 1, "end_line": 21,
      "cc": 30, "cognitive": 20, "sloc": 21}
 ]
+point["details"]["files"].append({"path": "elsewhere/peak.rs", "sloc": 42})
 html = render_dashboard(data)
 with sync_playwright() as p:
     for engine in (p.webkit, p.chromium):
@@ -95,7 +96,38 @@ with sync_playwright() as p:
                 lambda r: r.fulfill(body=html, content_type="text/html"),
             )
             page.goto("http://preview/slop/aurene/")
-            button = page.locator("#files-body .source-button").first
+            function_row = page.locator("#functions-body tr").filter(has_text="example (")
+            colors = function_row.locator("td.numeric").evaluate_all(
+                "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"
+            )
+            assert colors == [
+                "rgba(180, 85, 36, 0.192)",
+                "rgba(180, 85, 36, 0.29)",
+                "rgba(180, 85, 36, 0.12)",
+            ]
+            file_row = page.locator("#files-body tr").filter(has_text="src/example.rs")
+            assert file_row.locator(".file-button .source-path-segment").count() == 2
+            file_colors = file_row.locator("td.numeric").evaluate_all(
+                "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"
+            )
+            assert file_colors[:2] == [
+                "rgba(180, 85, 36, 0.1)", "rgba(180, 85, 36, 0.192)"
+            ]
+            assert file_row.locator("td.numeric").nth(2).inner_text() == "0%"
+            assert file_colors[3] != "rgba(0, 0, 0, 0)"
+            file_row.locator(".file-button").click()
+            assert file_row.locator("td.numeric").evaluate_all(
+                "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"
+            )[:2] == file_colors[:2]
+            assert file_row.locator("td.numeric").nth(3).inner_text() == "100%"
+            assert file_row.locator("td.numeric").nth(3).evaluate(
+                "e=>getComputedStyle(e).backgroundColor"
+            ) == "rgba(180, 85, 36, 0.36)"
+            assert function_row.locator("td.numeric").evaluate_all(
+                "cells=>cells.map(e=>getComputedStyle(e).backgroundColor)"
+            ) == colors
+            page.locator("#clear-file").click()
+            button = page.locator('#files-body .source-button[data-path="src/example.rs"]')
             assert button.locator('svg[aria-hidden="true"]').count() == 1
             assert button.inner_text() == ""
             icon = button.locator("svg").bounding_box()

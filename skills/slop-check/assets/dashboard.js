@@ -200,6 +200,35 @@ function repositoryHeatScales(details) {
   return scales;
 }
 
+function functionTableScales(functions) {
+  const scales={cc:0,cognitive:0,sloc:0};
+  for(const fn of functions) for(const metric of Object.keys(scales)) {
+    if(Number.isFinite(fn[metric])) scales[metric]=Math.max(scales[metric],fn[metric]);
+  }
+  return scales;
+}
+
+function tableHeatIntensity(value,max) {
+  return Number.isFinite(value) && Number.isFinite(max) && value>0 && max>0?Math.min(1,value/max):0;
+}
+
+function fileTableRows(details) {
+  const files=new Map((details?.files || []).map(file=>[file.path,{
+    path:file.path,sloc:file.sloc,cc:0,
+    verbosity:Number.isInteger(file.verbosity_flagged_loc)?(file.sloc?file.verbosity_flagged_loc/file.sloc:0):null
+  }]));
+  for(const fn of details?.functions || []) if(files.has(fn.path)) files.get(fn.path).cc+=fn.cc;
+  return [...files.values()];
+}
+
+function fileTableScales(rows) {
+  const scales={sloc:0,cc:0,verbosity:0};
+  for(const row of rows) for(const metric of Object.keys(scales)) {
+    if(Number.isFinite(row[metric])) scales[metric]=Math.max(scales[metric],row[metric]);
+  }
+  return scales;
+}
+
 function sourceMinimap(text) {
   const lines=text.split('\n');
   if(lines.at(-1)==='') lines.pop();
@@ -238,7 +267,7 @@ function sourceMapHeat(values,mapHeight,scrollHeight,offset,lineHeight) {
   return pixels;
 }
 
-if (typeof module !== 'undefined') module.exports = {repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+if (typeof module !== 'undefined') module.exports = {fileTableRows, fileTableScales, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -533,6 +562,14 @@ if (typeof document !== 'undefined') {
         const td=document.createElement('td');
         if (typeof cell==='object' && cell!==null) {
           const button=document.createElement('button'); button.textContent=cell.label; button.title=cell.label;
+          if(id==='files-body') {
+            button.replaceChildren();
+            const segments=cell.label.split('/');
+            segments.forEach((segment,index)=>{
+              const part=document.createElement('span');part.className='source-path-segment';
+              part.textContent=segment+(index<segments.length-1?'/':'');button.append(part);
+            });
+          }
           button.className='file-button'; button.onclick=cell.action;
           if(cell.action) td.append(button);
           else {const label=document.createElement('span');label.textContent=cell.label;td.append(label);}
@@ -599,18 +636,33 @@ if (typeof document !== 'undefined') {
     const included=path=>withinPath(path,$('root').value) && withinPath(path,sunLevel);
     $('details-meta').textContent=`${point.commit.slice(0,12)}  ${point.date.slice(0,10)}  ${point.subject}`;
     $('details-empty').hidden=!!point.details;
-    const fileTotals=Object.create(null);
-    for (const file of point.details?.files || []) if(included(file.path)) fileTotals[file.path]={sloc:file.sloc,cc:0,cognitive:0};
-    for (const fn of point.details?.functions || []) if(fileTotals[fn.path]) {fileTotals[fn.path].cc+=fn.cc; fileTotals[fn.path].cognitive+=fn.cognitive;}
-    const total=Object.values(fileTotals).reduce((sum,file)=>sum+file.cc,0);
-    table('files-body',Object.entries(fileTotals).sort((a,b)=>b[1].cc-a[1].cc || a[0].localeCompare(b[0])).slice(0,20).map(([path,file])=>[
-      {label:path,action:()=>chooseFile(path),source:{path}},format(file.sloc),format(file.cc),total?format(100*file.cc/total)+'%':'—']));
+    const allFiles=fileTableRows(point.details),fileScales=fileTableScales(allFiles);
+    const files=allFiles.filter(file=>included(file.path));
+    const total=files.reduce((sum,file)=>sum+file.cc,0);
+    const visibleFiles=files.map(file=>({...file,share:total?file.cc/total:null})).sort((a,b)=>b.cc-a.cc || a.path.localeCompare(b.path)).slice(0,20);
+    table('files-body',visibleFiles.map(file=>[
+      {label:file.path,action:()=>chooseFile(file.path),source:{path:file.path}},format(file.sloc),format(file.cc),
+      file.verbosity===null?'Unavailable':format(100*file.verbosity)+'%',file.share===null?'—':format(100*file.share)+'%']));
+    visibleFiles.forEach((file,index)=>{
+      ['sloc','cc','verbosity','share'].forEach((metric,column)=>{
+        const intensity=tableHeatIntensity(file[metric],metric==='share'?1:fileScales[metric]);
+        if(intensity>0) $('files-body').children[index].cells[column+1].style.backgroundColor=`rgba(180,85,36,${.08+.28*intensity})`;
+      });
+    });
     const functions=(point.details?.functions || []).filter(fn=>included(fn.path) && (!selectedFile || fn.path===selectedFile)).sort((a,b)=>b.cc-a.cc || b.cognitive-a.cognitive);
-    table('functions-body',functions.slice(0,20).map(fn=>[{label:`${fn.name} (${fn.path}:${fn.line})`,source:{path:fn.path,line:fn.line,end_line:fn.end_line}},format(fn.cc),format(fn.cognitive),format(fn.sloc)]));
+    const visibleFunctions=functions.slice(0,20);
+    const scales=functionTableScales(point.details?.functions || []);
+    table('functions-body',visibleFunctions.map(fn=>[{label:`${fn.name} (${fn.path}:${fn.line})`,source:{path:fn.path,line:fn.line,end_line:fn.end_line}},format(fn.cc),format(fn.cognitive),format(fn.sloc)]));
+    visibleFunctions.forEach((fn,index)=>{
+      ['cc','cognitive','sloc'].forEach((metric,column)=>{
+        const intensity=tableHeatIntensity(fn[metric],scales[metric]);
+        if(intensity>0) $('functions-body').children[index].cells[column+1].style.backgroundColor=`rgba(180,85,36,${.08+.28*intensity})`;
+      });
+    });
     $('function-title').textContent=selectedFile?'Functions in '+selectedFile:'Functions with highest complexity';
     $('clear-file').hidden=!selectedFile;
-    $('file-count').textContent=`Top ${Math.min(20,Object.keys(fileTotals).length)} of ${Object.keys(fileTotals).length} files; share within open directory`;
-    $('function-count').textContent=`Top ${Math.min(20,functions.length)} of ${functions.length} functions`;
+    $('file-count').textContent=`Showing ${visibleFiles.length} of ${files.length} files; share within open directory`;
+    $('function-count').textContent=`Showing ${visibleFunctions.length} of ${functions.length} functions`;
   }
   function chooseFile(path) {
     sunLevel=path.includes('/')?path.slice(0,path.lastIndexOf('/')):'/';
