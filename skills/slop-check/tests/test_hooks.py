@@ -96,8 +96,8 @@ def test_install_preserves_original_hook_location(repo, tmp_path):
     hook.chmod(0o755)
     git(repo, "config", "--local", "core.hooksPath", str(old_hooks))
     installer = load("install_hook")
-    installer.install(repo, ["src"], "rust")
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
+    installer.install(repo, ["src"])
     hooks = Path(git(repo, "config", "core.hooksPath"))
     subprocess.run([str(hooks / "pre-commit")], cwd=repo, check=True)
     assert (repo / "preserved").read_text() == "original"
@@ -126,7 +126,7 @@ def test_missing_shared_runtime_logs_without_blocking_commit(
     ):
         (runtime / name).write_text((SCRIPTS / name).read_text())
     monkeypatch.setattr(installer, "__file__", str(runtime / "install_hook.py"))
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     (runtime / missing).unlink()
     result = subprocess.run(
         ["git", "-C", str(repo), "commit", "--allow-empty", "-qm", "advisory"],
@@ -140,7 +140,7 @@ def test_missing_shared_runtime_logs_without_blocking_commit(
 
 
 def test_hook_uses_shared_runtime_without_copying_code(repo):
-    load("install_hook").install(repo, ["src"], "rust")
+    load("install_hook").install(repo, ["src"])
     output = repo / ".slop-check"
     settings = json.loads((output / "settings.json").read_text())
     assert settings["source_runtime"] == str(SCRIPTS.parent.resolve())
@@ -152,7 +152,7 @@ def test_hook_uses_shared_runtime_without_copying_code(repo):
 
 def test_hook_removal_restores_original_configuration_and_keeps_data(repo):
     installer = load("install_hook")
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     output = repo / ".slop-check"
     (output / "history.jsonl").write_text("retained\n")
     installer.remove(repo)
@@ -169,7 +169,7 @@ def test_hook_removal_restores_original_configuration_and_keeps_data(repo):
 
 def test_hook_removal_refuses_changed_configuration(repo):
     installer = load("install_hook")
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     git(repo, "config", "--local", "core.hooksPath", "/changed")
     with pytest.raises(ValueError, match="changed"):
         installer.remove(repo)
@@ -192,7 +192,7 @@ def test_hook_accepts_owned_server_first_installation(repo):
             }
         )
     )
-    load("install_hook").install(repo, ["src"], "rust")
+    load("install_hook").install(repo, ["src"])
     assert (output / "server-settings.json").exists()
 
 
@@ -201,7 +201,7 @@ def test_hook_rejects_foreign_server_first_installation(repo):
     output.mkdir()
     (output / "server-settings.json").write_text(json.dumps({"label": "foreign"}))
     with pytest.raises(ValueError, match="not owned"):
-        load("install_hook").install(repo, ["src"], "rust")
+        load("install_hook").install(repo, ["src"])
 
 
 def test_failed_analysis_is_logged_without_metrics(repo):
@@ -224,12 +224,13 @@ def test_empty_scope_is_not_a_zero_score(repo):
 
 
 def test_linked_worktree_commit_records_its_own_head(repo, tmp_path):
-    load("install_hook").install(repo, ["src"], "python")
+    load("install_hook").install(repo, ["src"])
     linked = tmp_path / "linked"
     git(repo, "worktree", "add", "-qb", "linked", str(linked))
     git(linked, "commit", "--allow-empty", "-qm", "linked commit")
-    wait_for(lambda: (repo / ".slop-check/history.jsonl").exists())
-    row = json.loads((repo / ".slop-check/history.jsonl").read_text())
+    history = repo / ".slop-check/history.jsonl"
+    wait_for(lambda: history.exists() and len(history.read_text().splitlines()) == 4)
+    row = json.loads(history.read_text().splitlines()[-1])
     assert row["commit"] == git(linked, "rev-parse", "HEAD")
     assert row["commit"] != git(repo, "rev-parse", "HEAD")
 
@@ -238,7 +239,7 @@ def test_installer_rejects_linked_worktree(repo, tmp_path):
     linked = tmp_path / "linked"
     git(repo, "worktree", "add", "-qb", "linked", str(linked))
     with pytest.raises(ValueError, match="primary"):
-        load("install_hook").install(linked, ["src"], "rust")
+        load("install_hook").install(linked, ["src"])
 
 
 def test_setup_failure_retains_raw_diagnostics(repo, tmp_path):
@@ -294,8 +295,6 @@ def test_recorder_cli_measures_revision_without_installing_hooks(repo):
             str(repo),
             "--source-root",
             "src",
-            "--language",
-            "python",
             "--commit",
             "HEAD",
         ],
@@ -303,9 +302,17 @@ def test_recorder_cli_measures_revision_without_installing_hooks(repo):
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    row = json.loads((repo / ".slop-check/history.jsonl").read_text())
-    assert row["commit"] == commit
-    assert row["status"] == "not_applicable"
+    rows = [
+        json.loads(line)
+        for line in (repo / ".slop-check/history.jsonl").read_text().splitlines()
+    ]
+    assert {row["commit"] for row in rows} == {commit}
+    assert [row["status"] for row in rows] == [
+        "started",
+        "not_applicable",
+        "not_applicable",
+        "complete",
+    ]
     assert not (repo / ".slop-check/settings.json").exists()
     assert ".slop-check/" not in git(repo, "status", "--short")
     assert (
@@ -317,23 +324,23 @@ def test_recorder_cli_measures_revision_without_installing_hooks(repo):
     )
 
 
-@pytest.mark.parametrize(
-    "selection", [["--source-root", "src"], ["--language", "rust"]]
-)
-def test_recorder_cli_rejects_incomplete_selection(repo, selection):
+def test_recorder_cli_rejects_removed_language_selection(repo):
     result = subprocess.run(
         [
             sys.executable,
             str(SCRIPTS / "record_commit.py"),
             "--repo",
             str(repo),
-            *selection,
+            "--source-root",
+            "src",
+            "--language",
+            "rust",
         ],
         capture_output=True,
         text=True,
     )
     assert result.returncode == 2
-    assert "--source-root and --language must be supplied together" in result.stderr
+    assert "unrecognized arguments" in result.stderr
     assert not (repo / ".slop-check").exists()
 
 
@@ -341,7 +348,7 @@ def test_hook_install_preserves_one_off_recording(repo):
     output = repo / ".slop-check"
     load("record_commit").record(repo, output, ["src"], "python", "/missing/uv")
     history = (output / "history.jsonl").read_bytes()
-    load("install_hook").install(repo, ["src"], "python")
+    load("install_hook").install(repo, ["src"])
     assert (output / "history.jsonl").read_bytes() == history
     assert git(repo, "config", "--local", "core.hooksPath") == str(output / "hooks")
 
@@ -352,7 +359,7 @@ def test_hook_install_preserves_recording_with_server_logs(repo):
     history = (output / "history.jsonl").read_bytes()
     for name in ("server.stdout.log", "server.stderr.log"):
         (output / name).write_text("server output\n")
-    load("install_hook").install(repo, ["src"], "python")
+    load("install_hook").install(repo, ["src"])
     assert (output / "history.jsonl").read_bytes() == history
     for name in ("server.stdout.log", "server.stderr.log"):
         assert (output / name).read_text() == "server output\n"
@@ -368,7 +375,7 @@ def test_hook_install_rejects_nonregular_server_logs(repo, kind):
     else:
         log.symlink_to(output / "history.jsonl")
     with pytest.raises(ValueError, match="not owned"):
-        load("install_hook").install(repo, ["src"], "python")
+        load("install_hook").install(repo, ["src"])
 
 
 @pytest.mark.parametrize("root", ["", "/src", "../src"])
@@ -381,8 +388,6 @@ def test_recorder_cli_rejects_roots_outside_repository(repo, root):
             str(repo),
             "--source-root",
             root,
-            "--language",
-            "python",
         ],
         capture_output=True,
         text=True,
@@ -401,8 +406,6 @@ def test_recorder_cli_requires_uvx_before_recording(repo):
             str(repo),
             "--source-root",
             "src",
-            "--language",
-            "python",
         ],
         env=os.environ | {"PATH": "/usr/bin:/bin"},
         capture_output=True,
@@ -429,7 +432,7 @@ def test_hook_install_rejects_unowned_recording_directory(repo, mutation):
         history.rename(output / "saved")
         history.symlink_to(output / "saved")
     with pytest.raises(ValueError, match="not owned"):
-        load("install_hook").install(repo, ["src"], "python")
+        load("install_hook").install(repo, ["src"])
 
 
 def wait_for(predicate, seconds=10):
@@ -442,7 +445,7 @@ def wait_for(predicate, seconds=10):
 
 
 def test_background_finishes_current_then_measures_newest_pending(repo, tmp_path):
-    load("install_hook").install(repo, ["src"], "rust")
+    load("install_hook").install(repo, ["src"])
     output = repo / ".slop-check"
     analyzer = tmp_path / "uvx"
     analyzer.write_text(f"""#!{sys.executable}
@@ -512,9 +515,9 @@ else:
 
 def test_hook_can_be_reinstalled_after_removal(repo):
     installer = load("install_hook")
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     installer.remove(repo)
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     installer.remove(repo)
     assert (
         subprocess.run(
@@ -528,7 +531,7 @@ def test_hook_can_be_reinstalled_after_removal(repo):
 @pytest.mark.parametrize("entry", ["settings.json", "hooks", "post-commit"])
 def test_reinstall_rejects_symlinked_configuration(repo, tmp_path, entry):
     installer = load("install_hook")
-    installer.install(repo, ["src"], "rust")
+    installer.install(repo, ["src"])
     output = repo / ".slop-check"
     original = (
         output / entry if entry != "post-commit" else output / "hooks/post-commit"
@@ -537,4 +540,4 @@ def test_reinstall_rejects_symlinked_configuration(repo, tmp_path, entry):
     original.rename(target)
     original.symlink_to(target, target_is_directory=target.is_dir())
     with pytest.raises(ValueError, match="symlink"):
-        installer.install(repo, ["src"], "rust")
+        installer.install(repo, ["src"])

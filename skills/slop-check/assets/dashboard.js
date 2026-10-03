@@ -283,7 +283,19 @@ function sourceMapHeat(values,mapHeight,scrollHeight,offset,lineHeight) {
   return pixels;
 }
 
-if (typeof module !== 'undefined') module.exports = {sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+function recordingSelection(data, identifier, language) {
+  const recording=(data.recordings || []).find(row=>row.recording_id===identifier);
+  const status=recording?.results[language] || 'missing';
+  if(status!=='complete') return {status,scope:-1,point:-1};
+  for(let scope=0;scope<data.series.length;scope++) {
+    if(data.series[scope].language!==language) continue;
+    const point=data.series[scope].snapshots.findIndex(row=>row.recording_id===identifier && row.commit===recording.commit);
+    if(point>=0) return {status,scope,point};
+  }
+  return {status:'missing',scope:-1,point:-1};
+}
+
+if (typeof module !== 'undefined') module.exports = {recordingSelection, sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -312,10 +324,11 @@ if (typeof document !== 'undefined') {
   function option(select,value,label) {
     const node = document.createElement('option'); node.value=value; node.textContent=label; select.append(node);
   }
-  function availability() {
-    const available=data.series.length>0;
+  function availability(forceEmpty=false) {
+    const available=!forceEmpty && data.series.length>0;
     $('no-data').hidden=available;
     for(const id of ['scope','axis','root','snapshot','explorer-metric']) $(id).disabled=!available;
+    $('scope').disabled=!data.series.length;
     if(available) return;
     series=null;points=[];selectedFile=null;sunLevel='/';
     $('sunburst-empty').hidden=false;$('sunburst-path').textContent='No measured complexity';
@@ -362,10 +375,10 @@ if (typeof document !== 'undefined') {
       chart.on('plotly_click',event => selectSnapshot(event.points[0].pointIndex));
     });
   }
-  function selectSnapshot(index) { selected=index; $('snapshot').value=String(index); detailsChanged(); }
+  function selectSnapshot(index) { selected=index; $('snapshot').value=String(index); draw(); syncCoverage(); }
   function draw() {
     if (!points.length) return;
-    const last=points.at(-1), totals=last.details?.functions.reduce((sum,fn) => sum+fn.cc,0);
+    const last=points[selected], totals=last.details?.functions.reduce((sum,fn) => sum+fn.cc,0);
     $('loc-value').textContent=format(last.metrics.total_loc);
     $('functions-value').textContent=format(last.metrics.total_functions);
     $('erosion-value').textContent=format(last.metrics.erosion*100)+'%';
@@ -697,9 +710,59 @@ if (typeof document !== 'undefined') {
     selectedFile=path;detailsChanged();
   }
   $('project').textContent=data.repository;
-  data.series.forEach((scope,i)=>option($('scope'),String(i),`${scope.language}: ${scope.roots.join(', ')} (${scope.policy?'current':'earlier aggregate'})`));
+  const statusLabels={complete:'Complete',failed:'Failed',not_applicable:'No eligible source',missing:'No result recorded'};
+  function coverageControls(identifier=null, language=null) {
+    const recordings=data.recordings || [];
+    $('recording-coverage').hidden=!recordings.length;
+    $('recording').replaceChildren();
+    for(const row of recordings) option($('recording'),row.recording_id,`${row.commit.slice(0,8)} · ${row.source_roots.join(', ')} · ${row.subject}`);
+    const recording=recordings.find(row=>row.recording_id===identifier) || recordings.at(-1);
+    if(!recording) return;
+    $('recording').value=recording.recording_id;
+    $('recording-language').replaceChildren();
+    for(const name of recording.languages) option($('recording-language'),name,`${name} · ${statusLabels[recording.results[name]]}`);
+    $('recording-language').value=recording.languages.includes(language)?language:
+      (recording.languages.find(name=>recording.results[name]==='complete') || recording.languages[0]);
+  }
+  function showCoverage(preserve=false) {
+    const root=$('root').value, file=selectedFile, level=sunLevel;
+    const identifier=$('recording').value, language=$('recording-language').value;
+    const choice=recordingSelection(data,identifier,language);
+    const recording=(data.recordings || []).find(row=>row.recording_id===identifier);
+    if(!recording) return;
+    const complete=recording.languages.filter(name=>recording.results[name]==='complete').length;
+    $('coverage-status').textContent=`${recording.commit.slice(0,8)} · ${language}: ${statusLabels[choice.status]}. ${complete} of ${recording.languages.length} supported languages have measurements.`;
+    if(choice.scope<0) {availability(true);return;}
+    availability();
+    $('scope').value=String(choice.scope);
+    scopeChanged(false);
+    selected=points.findIndex(point=>point.recording_id===identifier && point.commit===recording.commit);
+    $('snapshot').value=String(selected);selectedFile=null;sunLevel='/';
+    if(preserve) {
+      if([...$('root').options].some(option=>option.value===root)) $('root').value=root;
+      selectedFile=file;sunLevel=level;
+    }
+    draw();
+  }
+  function syncCoverage() {
+    const point=points[selected];
+    if(!point?.recording_id) {$('recording-coverage').hidden=true;return;}
+    coverageControls(point.recording_id,series.language);
+    const recording=data.recordings.find(row=>row.recording_id===point.recording_id);
+    $('coverage-status').textContent=recording.languages.map(name=>`${name}: ${statusLabels[recording.results[name]]}`).join(' · ');
+  }
+  $('recording').onchange=()=>{const language=$('recording-language').value;coverageControls($('recording').value,language);showCoverage();};
+  $('recording-language').onchange=()=>showCoverage();
+  data.series.forEach((scope,i)=>option($('scope'),String(i),`${scope.language}: ${scope.roots.join(', ')} (${scope.recording_mode==='individual'?'individual measurement':scope.recording_mode==='mixed'?'mixed recording':scope.policy?'current':'earlier aggregate'})`));
   $('scope').value=String(data.series.length-1);
-  $('scope').onchange=()=>scopeChanged(); $('axis').onchange=()=>scopeChanged();
+  $('scope').onchange=()=>{
+    const scope=data.series[Number($('scope').value)];
+    const coverageCommit=$('recording-coverage').hidden?null:(data.recordings || []).find(row=>row.recording_id===$('recording').value)?.commit;
+    const commit=points[selected]?.commit || coverageCommit;
+    const recording=(data.recordings || []).find(row=>scope.recording_mode==='mixed' && row.commit===commit && row.analyzer===scope.analyzer && row.inclusion_policy===scope.policy && JSON.stringify(row.source_roots)===JSON.stringify(scope.roots));
+    if(recording) {coverageControls(recording.recording_id,scope.language);showCoverage();}
+    else {availability();scopeChanged();syncCoverage();}
+  }; $('axis').onchange=()=>scopeChanged();
   $('root').onchange=()=>{sunLevel='/';selectedFile=null;detailsChanged();};
   $('explorer-metric').onchange=()=>{detailsChanged();$('source-metric').value=$('explorer-metric').value;recolorSource();};
   $('snapshot').onchange=()=>selectSnapshot(Number($('snapshot').value));
@@ -715,23 +778,28 @@ if (typeof document !== 'undefined') {
     functionSort={metric,direction:functionSort.metric===metric && functionSort.direction==='desc'?'asc':'desc'};
     detailsChanged();
   };
-  table('events-body',data.events.slice(-10).reverse().map(event=>[event.commit.slice(0,12),event.status,event.subject,event.timestamp]));
+  table('events-body',data.events.slice(-10).reverse().map(event=>[event.commit.slice(0,12),event.status,event.language || event.languages?.join(', ') || 'Recording',event.subject,event.timestamp]));
   $('event-count').textContent=`${data.events.length} skipped, failed, or not-applicable attempts; latest 10 shown`;
   $('warning-list').replaceChildren();
   for (const warning of data.warnings) {const li=document.createElement('li');li.textContent=warning;$('warning-list').append(li);}
   $('warning-count').textContent=`${data.warnings.length} data-availability notices`;
   availability();
   if (data.series.length) scopeChanged();
+  coverageControls();
+  if((data.recordings || []).length) showCoverage();
 
-  function scopeIdentity(value) {return JSON.stringify([value.analyzer,value.language,value.roots,value.policy,value.scope]);}
+  function scopeIdentity(value) {return JSON.stringify([value.analyzer,value.language,value.roots,value.policy,value.scope,value.recording_mode]);}
   function applyRefresh(next) {
+    const coverageActive=!$('recording-coverage').hidden;
+    const recordingID=$('recording').value, recordingLanguage=$('recording-language').value;
+    const selectedRecording=(data.recordings || []).find(row=>row.recording_id===recordingID);
     const identity=series?scopeIdentity(series):null;
     const oldCommit=points[selected]?.commit;
     const followLatest=selected===points.length-1;
     const root=$('root').value, file=selectedFile, level=sunLevel;
     data=next;
     $('scope').replaceChildren();
-    data.series.forEach((scope,i)=>option($('scope'),String(i),`${scope.language}: ${scope.roots.join(', ')} (${scope.policy?'current':'earlier aggregate'})`));
+    data.series.forEach((scope,i)=>option($('scope'),String(i),`${scope.language}: ${scope.roots.join(', ')} (${scope.recording_mode==='individual'?'individual measurement':scope.recording_mode==='mixed'?'mixed recording':scope.policy?'current':'earlier aggregate'})`));
     const index=data.series.findIndex(value=>scopeIdentity(value)===identity);
     $('scope').value=String(index<0?data.series.length-1:index);
     availability();
@@ -744,11 +812,17 @@ if (typeof document !== 'undefined') {
       selectedFile=file;
       draw();
     }
-    table('events-body',data.events.slice(-10).reverse().map(event=>[event.commit.slice(0,12),event.status,event.subject,event.timestamp]));
+    table('events-body',data.events.slice(-10).reverse().map(event=>[event.commit.slice(0,12),event.status,event.language || event.languages?.join(', ') || 'Recording',event.subject,event.timestamp]));
     $('event-count').textContent=`${data.events.length} skipped, failed, or not-applicable attempts; latest 10 shown`;
     $('warning-list').replaceChildren();
     for(const warning of data.warnings) {const item=document.createElement('li');item.textContent=warning;$('warning-list').append(item);}
     $('warning-count').textContent=`${data.warnings.length} data-availability notices`;
+    const replacement=(data.recordings || []).find(row=>selectedRecording && row.commit===selectedRecording.commit && row.analyzer===selectedRecording.analyzer && row.inclusion_policy===selectedRecording.inclusion_policy && JSON.stringify(row.source_roots)===JSON.stringify(selectedRecording.source_roots));
+    coverageControls(replacement?.recording_id || recordingID,recordingLanguage);
+    if(coverageActive && (data.recordings || []).length) {
+      if(replacement?.recording_id!==recordingID && sourceDialog.open) sourceDialog.close();
+      showCoverage(true);
+    } else $('recording-coverage').hidden=true;
   }
   if (location.protocol==='http:' || location.protocol==='https:') {
     let inFlight=false, timer=null, etag=null;

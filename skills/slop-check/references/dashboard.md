@@ -10,11 +10,11 @@ configuration in `.slop-check/`; scripts and dashboard assets remain shared.
 
 ```sh
 python3 scripts/record_commit.py --repo /absolute/path/to/repo \
-  --source-root src --language python --commit HEAD
+  --source-root src --commit HEAD
 ```
 
-Choose explicit relative source roots and one of `python`, `rust`, or
-`javascript`. Repeat `--source-root` for multiple roots. For comparisons, run the
+Choose explicit relative source roots. Python, JavaScript, and Rust are
+automatically measured separately under those roots. Repeat `--source-root` for multiple roots. For comparisons, run the
 command once for each resolved base/head revision with the same selection. The
 recorder resolves revisions to full commit hashes and retains inline tests;
 keep this scope distinct from a production-only PR report. Inspect each accepted
@@ -106,8 +106,13 @@ the supplied commit order, including commits outside that history. Date view use
 commit timestamp, which can differ from ancestry. Measurements outside that
 history are omitted in history mode; comparison mode includes only the requested
 hashes. Different analyzer versions, languages, roots, and inclusion
-policies appear as separate scopes. Repeated measurements use the latest accepted
-attempt for each commit within a scope. Missing detail artifacts leave aggregate
+policies appear as separate scopes. Mixed-language recordings use the latest started
+attempt for each commit within a scope. Language results belong to that single
+attempt; a failure or missing result never falls back to an earlier success.
+The recorded-commit and language controls show complete, failed, no-source, and
+unrecorded results, including recordings with no successful measurements.
+Switching languages keeps the selected commit. Earlier individual measurements
+remain separate evidence. Missing detail artifacts leave aggregate
 metrics visible and create gaps in hotspot/distribution plots. One measured
 commit is a baseline, not an observed trend. Directory renames can move bands
 without changing complexity.

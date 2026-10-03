@@ -332,3 +332,16 @@ test('syntax highlighting uses plain text for oversized files',()=>{
  assert.equal(app.sourceMarkup('x'.repeat(128001),'rust',highlighter),null);
  assert.equal(app.sourceMarkup('x\n'.repeat(4001),'rust',highlighter),null);
 });
+
+test('recording selection never fills missing language results from another attempt',()=>{
+  const data={recordings:[{recording_id:'b',commit:'sha',results:{python:'failed',javascript:'complete',rust:'missing'}}],
+    series:[{language:'python',snapshots:[{commit:'sha',recording_id:'a'}]},
+            {language:'javascript',snapshots:[{commit:'sha',recording_id:'b'}]}]};
+  assert.deepEqual(app.recordingSelection(data,'b','python'),{status:'failed',scope:-1,point:-1});
+  assert.deepEqual(app.recordingSelection(data,'b','javascript'),{status:'complete',scope:1,point:0});
+  assert.deepEqual(app.recordingSelection(data,'b','rust'),{status:'missing',scope:-1,point:-1});
+});
+test('recording selection supports an interrupted attempt with no successful series',()=>{
+  const data={recordings:[{recording_id:'a',commit:'sha',results:{python:'missing'}}],series:[]};
+  assert.deepEqual(app.recordingSelection(data,'a','python'),{status:'missing',scope:-1,point:-1});
+});
