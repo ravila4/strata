@@ -3,15 +3,13 @@
 import argparse
 import fcntl
 import json
-import os
-import subprocess
 import sys
 import tempfile
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from record_commit import append_history, git, record
+from record_commit import append_history, git, record_all, selection, spawn_worker
 
 
 def read_queue(output: Path) -> dict:
@@ -39,10 +37,8 @@ def enqueue(repo: Path, output: Path) -> None:
         "repository": str(repo),
         "commit": git(repo, "rev-parse", "HEAD").decode().strip(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        **selection(json.loads((output / "settings.json").read_text())),
     }
-    environment = os.environ.copy()
-    for name in git(repo, "rev-parse", "--local-env-vars").decode().splitlines():
-        environment.pop(name, None)
     with (output / "queue.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         state = read_queue(output)
@@ -53,22 +49,7 @@ def enqueue(repo: Path, output: Path) -> None:
             )
         state["pending"] = job
         save_queue(output, state)
-        with (output / "worker.log").open("ab") as log:
-            subprocess.Popen(
-                [
-                    sys.executable,
-                    str(Path(__file__).resolve()),
-                    "--worker",
-                    "--output",
-                    str(output),
-                ],
-                cwd=repo,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=log,
-                start_new_session=True,
-            )
+        spawn_worker(repo, output)
 
 
 def work(output: Path) -> None:
@@ -91,14 +72,13 @@ def work(output: Path) -> None:
                 state.update(current=job, pending=None)
                 save_queue(output, state)
             try:
-                settings = json.loads((output / "settings.json").read_text())
-                record(
+                record_all(
                     Path(job["repository"]),
                     output,
-                    settings["source_roots"],
-                    settings["language"],
-                    settings["uvx"],
+                    job["source_roots"],
+                    job["uvx"],
                     commit=job["commit"],
+                    languages=job["languages"],
                 )
             except Exception as error:
                 # Isolate unexpected recorder failures so newer pending commits still run.

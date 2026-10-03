@@ -36,13 +36,14 @@ record an initial measurement:
 
 ```sh
 python3 skills/slop-check/scripts/install_hook.py \
-  --repo /absolute/path/to/project --source-root src --language python
+  --repo /absolute/path/to/project --source-root src
 python3 skills/slop-check/scripts/record_commit.py \
   --repo /absolute/path/to/project
 ```
 
-Choose `python`, `rust`, or `javascript` and the source roots for the project being
-measured. The hook records future commits in the background. One Strata installation
+Choose source roots for the project being measured. Every recording automatically
+scans Python, JavaScript, and Rust beneath those roots, with separate metrics for
+each language. Adding a supported language under those roots needs no setup change. The hook records future commits in the background. One Strata installation
 can serve multiple projects. Application scripts and dashboard assets stay in this
 installation; each project's excluded `.slop-check/` directory holds its configuration,
 measurements, reports, queue state, logs, and minimal hook wrappers.

@@ -11,14 +11,66 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 EXTENSIONS = {
-    "rust": {".rs"},
     "python": {".py", ".pyw"},
     "javascript": {".js", ".mjs", ".cjs"},
+    "rust": {".rs"},
 }
+ANALYZER = "scb-check==0.2.0"
+POLICY = "tracked-source-v1"
+SCOPE = "separate test files excluded; inline tests retained"
+
+
+def canonical_roots(roots: list[str]) -> list[str]:
+    if not roots or any(
+        not root or Path(root).is_absolute() or ".." in Path(root).parts
+        for root in roots
+    ):
+        raise ValueError("Source roots must be relative paths within the repository")
+    paths = sorted({Path(root) for root in roots})
+    return [str(path) for path in paths if not any(p in paths for p in path.parents)]
+
+
+def selection(settings: dict) -> dict:
+    if settings.get("format") != 2:
+        raise ValueError("Unsupported recorder settings; reinstall the hook")
+    return {
+        "source_roots": canonical_roots(settings["source_roots"]),
+        "languages": list(EXTENSIONS),
+        "uvx": settings["uvx"],
+        "analyzer": ANALYZER,
+        "inclusion_policy": POLICY,
+        "scope": SCOPE,
+    }
+
+
+def spawn_worker(repo: Path, output: Path) -> None:
+    environment = os.environ.copy()
+    for name in git(repo, "rev-parse", "--local-env-vars").decode().splitlines():
+        environment.pop(name, None)
+    with (output / "worker.log").open("ab") as log:
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).with_name("queue_commit.py")),
+                "--worker",
+                "--output",
+                str(output),
+            ],
+            cwd=repo,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
+
+
 METRICS = (
     "total_loc",
     "verbosity",
@@ -196,6 +248,7 @@ def record(
     language: str,
     uv: str,
     commit: str | None = None,
+    recording_id: str | None = None,
 ) -> None:
     """Append a complete or failed attempt, retaining raw evidence per run."""
     commit = commit or git(repo, "rev-parse", "HEAD").decode().strip()
@@ -208,14 +261,16 @@ def record(
         "commit": commit,
         "repository": str(repo),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "analyzer": "scb-check==0.2.0",
+        "analyzer": ANALYZER,
         "language": language,
         "source_roots": roots,
-        "scope": "separate test files excluded; inline tests retained",
-        "inclusion_policy": "tracked-source-v1",
+        "scope": SCOPE,
+        "inclusion_policy": POLICY,
         "report": str(directory.relative_to(output)),
         "status": "failed",
     }
+    if recording_id is not None:
+        row["recording_id"] = recording_id
     try:
         commit_date, subject = (
             git(repo, "show", "-s", "--format=%cI%x00%s", commit)
@@ -309,15 +364,89 @@ def record(
     )
 
 
+def record_all(
+    repo: Path,
+    output: Path,
+    roots: list[str],
+    uv: str,
+    commit: str | None = None,
+    languages: list[str] | None = None,
+) -> None:
+    """Record one committed selection without filling gaps from other attempts."""
+    roots = canonical_roots(roots)
+    commit = commit or git(repo, "rev-parse", "HEAD").decode().strip()
+    languages = list(EXTENSIONS) if languages is None else languages
+    output.mkdir(parents=True, exist_ok=True)
+    started = {
+        "recording_id": uuid.uuid4().hex,
+        "repository": str(repo),
+        "commit": commit,
+        "source_roots": roots,
+        "languages": languages,
+        "analyzer": ANALYZER,
+        "inclusion_policy": POLICY,
+        "scope": SCOPE,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "status": "started",
+    }
+    append_history(output, started)
+    for language in languages:
+        try:
+            record(
+                repo,
+                output,
+                roots,
+                language,
+                uv,
+                commit=commit,
+                recording_id=started["recording_id"],
+            )
+        except Exception as error:
+            # Isolate unexpected failures so the remaining languages still run.
+            traceback.print_exc()
+            append_history(
+                output,
+                started
+                | {"language": language, "status": "failed", "error": str(error)},
+            )
+
+
+def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    with (output / "worker.lock").open("a") as worker_lock:
+        try:
+            fcntl.flock(worker_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError(
+                "Recorder busy; retry after the active recording finishes"
+            ) from error
+        try:
+            record_all(
+                repo,
+                output,
+                inputs["source_roots"],
+                inputs["uvx"],
+                commit=commit,
+                languages=inputs["languages"],
+            )
+        finally:
+            # Hooks can enqueue while a manual scan owns the worker lock.
+            with (output / "queue.lock").open("a") as queue_lock:
+                fcntl.flock(queue_lock, fcntl.LOCK_EX)
+                fcntl.flock(worker_lock, fcntl.LOCK_UN)
+                queue_path = output / "queue.json"
+                if queue_path.exists() and json.loads(queue_path.read_text()).get(
+                    "pending"
+                ):
+                    spawn_worker(repo, output)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--source-root", action="append")
-    parser.add_argument("--language", choices=list(EXTENSIONS))
     parser.add_argument("--commit", default="HEAD")
     args = parser.parse_args()
-    if bool(args.source_root) != bool(args.language):
-        parser.error("--source-root and --language must be supplied together")
     repo = Path(
         git(args.repo.resolve(), "rev-parse", "--show-toplevel").decode().strip()
     )
@@ -326,22 +455,20 @@ def main() -> None:
     )
     output = repo / ".slop-check"
     if args.source_root:
-        for root in args.source_root:
-            if not root or Path(root).is_absolute() or ".." in Path(root).parts:
-                parser.error(
-                    "Source roots must be relative paths within the repository"
-                )
+        try:
+            roots = canonical_roots(args.source_root)
+        except ValueError as error:
+            parser.error(str(error))
         uvx = shutil.which("uvx")
         if uvx is None:
             parser.error("uvx is required; install uv before recording")
-        roots, language = args.source_root, args.language
+        inputs = selection({"format": 2, "source_roots": roots, "uvx": uvx})
     else:
         settings = json.loads((output / "settings.json").read_text())
-        roots, language, uvx = (
-            settings["source_roots"],
-            settings["language"],
-            settings["uvx"],
-        )
+        try:
+            inputs = selection(settings)
+        except ValueError as error:
+            parser.error(str(error))
     exclude = Path(
         git(repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
         .decode()
@@ -352,7 +479,10 @@ def main() -> None:
     if "/.slop-check/" not in current.splitlines():
         with exclude.open("a") as stream:
             stream.write("\n/.slop-check/\n")
-    record(repo, output, roots, language, uvx, commit=commit)
+    try:
+        record_manual(repo, output, inputs, commit)
+    except ValueError as error:
+        parser.error(str(error))
 
 
 if __name__ == "__main__":

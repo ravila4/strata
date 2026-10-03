@@ -62,12 +62,39 @@ def load_dataset(
         commit, date, subject = line.split("\x00", 2)
         metadata[commit] = {"date": date, "subject": subject, "order": len(metadata)}
     rows = read_history(output)
+    recordings = {}
+    attempts = {}
+    for row in rows:
+        if row["commit"] not in metadata:
+            continue
+        if row["status"] == "started":
+            key = (
+                row["commit"],
+                row["analyzer"],
+                tuple(row["source_roots"]),
+                row["inclusion_policy"],
+                row["scope"],
+            )
+            recording = (
+                row
+                | metadata[row["commit"]]
+                | {"results": dict.fromkeys(row["languages"], "missing")}
+            )
+            recordings[key] = recording
+            attempts[row["recording_id"]] = recording
+        elif row.get("recording_id") in attempts and row.get("language"):
+            attempts[row["recording_id"]]["results"][row["language"]] = row["status"]
+    selected_ids = {r["recording_id"] for r in recordings.values()}
     scopes = {}
     events, warnings = [], []
     excluded = 0
     for row in rows:
         if row["commit"] not in metadata:
             excluded += 1
+            continue
+        if row.get("recording_id") and row["recording_id"] not in selected_ids:
+            continue
+        if row["status"] == "started":
             continue
         if row["status"] != "complete":
             events.append(row | metadata[row["commit"]])
@@ -78,6 +105,7 @@ def load_dataset(
             tuple(sorted(row["source_roots"])),
             row.get("inclusion_policy"),
             row["scope"],
+            "mixed" if row.get("recording_id") else "individual",
         )
         scope = scopes.setdefault(
             key,
@@ -87,6 +115,7 @@ def load_dataset(
                 "roots": list(key[2]),
                 "policy": row.get("inclusion_policy"),
                 "scope": row["scope"],
+                "recording_mode": key[5],
                 "by_commit": {},
             },
         )
@@ -129,6 +158,7 @@ def load_dataset(
         "excluded": excluded,
         "head": head,
         "requested_commits": commits or [],
+        "recordings": sorted(recordings.values(), key=lambda r: r["order"]),
     }
 
 

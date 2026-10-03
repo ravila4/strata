@@ -8,14 +8,17 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from record_commit import canonical_roots
 
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
 
 
-def install(repo: Path, roots: list[str], language: str) -> None:
+def install(repo: Path, roots: list[str]) -> None:
     """Preserve existing hook locations and activate only local configuration."""
     repo = Path(git(repo.resolve(), "rev-parse", "--show-toplevel"))
     git_dir = git(repo, "rev-parse", "--absolute-git-dir")
@@ -24,12 +27,7 @@ def install(repo: Path, roots: list[str], language: str) -> None:
         raise ValueError(
             "Install from the primary checkout; local hook configuration is shared with linked worktrees"
         )
-    for root in roots:
-        path = Path(root)
-        if path.is_absolute() or ".." in path.parts or not root:
-            raise ValueError(
-                "Source roots must be relative paths within the repository"
-            )
+    roots = canonical_roots(roots)
     uvx = shutil.which("uvx")
     if uvx is None:
         raise ValueError("uvx is required; install uv before installing the hook")
@@ -47,13 +45,17 @@ def install(repo: Path, roots: list[str], language: str) -> None:
         try:
             names = {p.name for p in output.iterdir()}
             logs = {"server.stdout.log", "server.stderr.log"}
+            lock_files = {"worker.lock", "queue.lock"}
             owned = (
                 not output.is_symlink()
-                and names <= {"history.jsonl", "reports", "server-settings.json"} | logs
+                and names
+                <= {"history.jsonl", "reports", "server-settings.json"}
+                | logs
+                | lock_files
                 and all(
                     (output / name).is_file() and not (output / name).is_symlink()
                     for name in names
-                    & (logs | {"history.jsonl", "server-settings.json"})
+                    & (logs | lock_files | {"history.jsonl", "server-settings.json"})
                 )
                 and (
                     "reports" not in names
@@ -127,12 +129,17 @@ def install(repo: Path, roots: list[str], language: str) -> None:
     runtime = Path(__file__).resolve().parents[1]
     settings.update(
         source_roots=roots,
-        language=language,
+        format=2,
         uvx=uvx,
         python=sys.executable,
         source_runtime=str(runtime),
     )
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+    settings.pop("language", None)
+    with tempfile.NamedTemporaryFile(mode="w", dir=output, delete=False) as stream:
+        json.dump(settings, stream, indent=2)
+        stream.write("\n")
+        temporary = Path(stream.name)
+    temporary.replace(settings_path)
     original_post = settings["previous_hooks"].get("post-commit")
     preserved_post = f'{shlex.quote(original_post)} "$@"\n' if original_post else ""
     post = hooks / "post-commit"
@@ -196,15 +203,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--source-root", action="append")
-    parser.add_argument("--language", choices=["rust", "python", "javascript"])
     parser.add_argument("--remove", action="store_true")
     args = parser.parse_args()
     if args.remove:
         remove(args.repo)
     else:
-        if not args.source_root or not args.language:
-            parser.error("--source-root and --language are required for installation")
-        install(args.repo, args.source_root, args.language)
+        if not args.source_root:
+            parser.error("--source-root is required for installation")
+        install(args.repo, args.source_root)
 
 
 if __name__ == "__main__":
