@@ -470,6 +470,25 @@ def measured_commits(rows: list[dict], inputs: dict) -> set[str]:
     return {commit for commit, done in recordings.values() if expected <= done}
 
 
+def resolve_commit(repo: Path, revision: str) -> str:
+    """Full hash of a revision, or a readable error when it names no commit."""
+    try:
+        return (
+            git(
+                repo,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                f"{revision}^{{commit}}",
+            )
+            .decode()
+            .strip()
+        )
+    except subprocess.CalledProcessError:
+        raise ValueError(f"{revision!r} is not a commit") from None
+
+
 def backfill_commits(
     repo: Path, revision: str, since: str | None = None, every: int = 1
 ) -> list[str]:
@@ -479,7 +498,8 @@ def backfill_commits(
     command = ["rev-list", "--first-parent"]
     if since:
         command.append(f"--since={since}")
-    commits = git(repo, *command, "--end-of-options", revision).decode().split()
+    tip = resolve_commit(repo, revision)
+    commits = git(repo, *command, tip).decode().split()
     return commits[::every]
 
 
@@ -520,11 +540,7 @@ def toplevel(repo: Path) -> Path:
 def scan(repo: Path, revision: str, roots: list[str] | None) -> None:
     """Measure one revision with explicit roots or the installed hook settings."""
     repo = toplevel(repo)
-    commit = (
-        git(repo, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
-        .decode()
-        .strip()
-    )
+    commit = resolve_commit(repo, revision)
     inputs = recording_inputs(repo, roots)
     exclude_output(repo)
     record_manual(repo, repo / ".strata", inputs, [commit])

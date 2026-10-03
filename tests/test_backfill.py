@@ -3,7 +3,7 @@ import json
 import pytest
 
 import test_hooks
-from strata import hooks, recorder
+from strata import cli, hooks, recorder
 from test_hooks import fake_analyzer, git
 
 repo = test_hooks.repo
@@ -140,3 +140,20 @@ def test_backfill_records_only_unmeasured_commits(repo, tmp_path):
         first,
         second,
     }
+
+
+def test_cli_backfill_defaults_to_head():
+    assert cli.parser().parse_args(["backfill"]).revision == "HEAD"
+
+
+@pytest.mark.parametrize("measure", [recorder.scan, recorder.backfill])
+def test_unknown_revision_is_named(repo, measure):
+    with pytest.raises(ValueError, match="'nope' is not a commit"):
+        measure(repo, "nope", ["src"])
+
+
+@pytest.mark.parametrize("measure", [recorder.scan, recorder.backfill])
+def test_repository_without_commits_is_reported(tmp_path, measure):
+    git(tmp_path, "init", "-q")
+    with pytest.raises(ValueError, match="'HEAD' is not a commit"):
+        measure(tmp_path, "HEAD", ["src"])

@@ -81,7 +81,7 @@ def parser() -> argparse.ArgumentParser:
         description="Measure first-parent history, newest first, skipping commits "
         "already measured with the same selection.",
     )
-    command.add_argument("revision", nargs="?", default="main")
+    command.add_argument("revision", nargs="?", default="HEAD")
     command.add_argument(
         "--since", help="only commits after this date, e.g. 2026-01-01"
     )
