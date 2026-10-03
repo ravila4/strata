@@ -666,9 +666,7 @@ def source_url(url, **overrides):
 
     with fetch(url + "/data.json") as response:
         data = json.load(response)
-    query = dict(
-        commit=data["head"], path="src/main.rs", scope="0", revision=data["revision"]
-    )
+    query = dict(commit=data["head"], path="src/main.rs", scope=data["series"][0]["id"])
     return url + "/source.json?" + urlencode(query | overrides)
 
 
@@ -690,13 +688,12 @@ def test_live_source_reads_recorded_commit_instead_of_worktree(server):
 @pytest.mark.parametrize(
     "query,status",
     [
-        ({"revision": "stale"}, 409),
         ({"commit": "HEAD"}, 400),
         ({"commit": "0" * 40}, 404),
         ({"path": "src/tests.rs"}, 404),
         ({"path": "../.git/config"}, 404),
         ({"scope": "-1"}, 400),
-        ({"scope": "1"}, 404),
+        ({"scope": "0" * 16}, 404),
         ({"scope": "0.0"}, 400),
         ({"path": ""}, 400),
     ],
@@ -756,6 +753,18 @@ def test_source_rejects_nonregular_or_unrenderable_blobs(server, path, contents)
     with pytest.raises(urllib.error.HTTPError) as error:
         fetch(source_url(url, path=path))
     assert error.value.code == 422
+
+
+def test_source_survives_history_changes_after_the_page_loaded(server):
+    url, repo = server
+    commit = record_source(repo)
+    request = source_url(url)
+    test_hooks.load("record_commit").append_history(
+        repo / ".slop-check",
+        {"commit": commit, "timestamp": "2026-10-03", "status": "skipped"},
+    )
+    with fetch(request) as response:
+        assert json.load(response)["commit"] == commit
 
 
 def test_source_does_not_invent_old_flagged_locations(server):

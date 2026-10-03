@@ -146,8 +146,8 @@ an unavailable notice for that metric; they do not infer locations from counts.
 Files over 256 KiB or 10,000 lines, binary content, and unavailable Git objects
 cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
 text with the metric gutter. Excessive highlighting markup also uses plain text.
-If the measurement changes before a source request arrives, refresh and reopen
-it. Measurements must include recorded line locations for metric highlighting.
+Source stays available while new recordings or backfills arrive; the window
+names the commit it shows. Measurements must include recorded line locations for metric highlighting.
 
 The server refreshes its dataset when history or queue state changes. History
 mode also follows changes to checkout HEAD; comparisons retain their selected

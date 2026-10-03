@@ -1,6 +1,7 @@
 """Load recorded commit measurements and render the live dashboard."""
 
 import fcntl
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -110,6 +111,7 @@ def load_dataset(
         scope = scopes.setdefault(
             key,
             {
+                "id": hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16],
                 "analyzer": row["analyzer"],
                 "language": row["language"],
                 "roots": list(key[2]),

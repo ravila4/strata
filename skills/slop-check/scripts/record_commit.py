@@ -32,8 +32,10 @@ def canonical_roots(roots: list[str]) -> list[str]:
         for root in roots
     ):
         raise ValueError("Source roots must be relative paths within the repository")
-    paths = sorted({Path(root) for root in roots})
-    return [str(path) for path in paths if not any(p in paths for p in path.parents)]
+    paths = {Path(root) for root in roots}
+    return sorted(
+        str(path) for path in paths if not any(p in paths for p in path.parents)
+    )
 
 
 def selection(settings: dict) -> dict:

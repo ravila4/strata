@@ -24,6 +24,11 @@ def test_roots_are_canonical_and_language_is_automatic(repo):
     settings = json.loads((repo / ".slop-check/settings.json").read_text())
     assert settings["source_roots"] == ["src"]
     assert "language" not in settings
+    # The dashboard matches recordings to scopes by plain string order.
+    assert load("record_commit").canonical_roots(["lib/x", "lib-y"]) == [
+        "lib-y",
+        "lib/x",
+    ]
     assert settings["format"] == 2
 
 
@@ -278,10 +283,9 @@ def test_source_for_superseded_recording_is_not_authorized(repo):
             newer_result,
         ],
     )
-    data["revision"] = "new-revision"
     server = load("serve_dashboard")
     query = urlencode(
-        {"commit": sha, "path": "src/main.rs", "scope": "0", "revision": "new-revision"}
+        {"commit": sha, "path": "src/main.rs", "scope": data["series"][0]["id"]}
     )
     with pytest.raises(server.SourceError) as error:
         server.read_source(repo, data, query)

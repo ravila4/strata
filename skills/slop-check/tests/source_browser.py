@@ -61,6 +61,7 @@ data = {
     "head": commit,
     "series": [
         {
+            "id": "0123456789abcdef",
             "language": "rust",
             "roots": ["src"],
             "policy": "production",

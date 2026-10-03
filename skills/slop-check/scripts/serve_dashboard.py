@@ -88,26 +88,29 @@ class SourceError(ValueError):
 
 
 def read_source(repo: Path, data: dict, query: str) -> dict:
-    """Read a bounded regular Git blob authorized by one dataset revision."""
+    """Read a bounded regular Git blob recorded in the current dataset.
+
+    Recorded commits are immutable, so a request made before the dataset
+    refreshed stays valid while its scope still records that file.
+    """
     fields = parse_qs(query, keep_blank_values=True)
-    if set(fields) != {"commit", "path", "scope", "revision"} or any(
+    if set(fields) != {"commit", "path", "scope"} or any(
         len(values) != 1 or not values[0] for values in fields.values()
     ):
-        raise SourceError(400, "Provide commit, path, scope and revision exactly once")
+        raise SourceError(400, "Provide commit, path and scope exactly once")
     params = {key: values[0] for key, values in fields.items()}
     commit, path = params["commit"], params["path"]
     if (
         not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
-        or not re.fullmatch(r"[0-9]{1,9}", params["scope"])
+        or not re.fullmatch(r"[0-9a-f]{16}", params["scope"])
         or "\x00" in path
     ):
         raise SourceError(400, "Invalid commit, scope or path")
-    if params["revision"] != data["revision"]:
-        raise SourceError(409, "Measurements changed; refresh and reopen the source")
-    scope_index = int(params["scope"])
-    if scope_index >= len(data["series"]):
+    scope = next(
+        (entry for entry in data["series"] if entry["id"] == params["scope"]), None
+    )
+    if scope is None:
         raise SourceError(404, "Measurement scope not found")
-    scope = data["series"][scope_index]
     snapshot = next(
         (point for point in scope["snapshots"] if point["commit"] == commit), None
     )

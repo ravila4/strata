@@ -289,10 +289,10 @@ test('zero burden retains a known zero timeline and weighted Other conserves tot
  assert.deepEqual(result.names,['b.rs','/other']);assert.deepEqual(result.values,[[36,22]]);assert.deepEqual(result.totals,[58]);
 });
 
-test('source URLs retain deployment mount and pin measurement revision',()=>{
- const url=app.sourceURL('https://host/slop/aurene?old=1', {commit:'abc',path:'src/a b.rs',scope:2,revision:'r1'});
+test('source URLs retain deployment mount and name a stable scope',()=>{
+ const url=app.sourceURL('https://host/slop/aurene?old=1', {commit:'abc',path:'src/a b.rs',scope:'0123456789abcdef'});
  assert.equal(url.pathname,'/slop/aurene/source.json');
- assert.deepEqual(Object.fromEntries(url.searchParams),{commit:'abc',path:'src/a b.rs',scope:'2',revision:'r1'});
+ assert.deepEqual(Object.fromEntries(url.searchParams),{commit:'abc',path:'src/a b.rs',scope:'0123456789abcdef'});
 });
 test('source heat shades function ranges with maximum overlapping complexity',()=>{
  const source={functions:[{line:2,end_line:4,cc:12,cognitive:15,sloc:4},{line:3,end_line:3,cc:3,cognitive:1,sloc:1}]};
