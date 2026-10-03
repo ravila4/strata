@@ -453,7 +453,7 @@ def record_manual(repo: Path, output: Path, inputs: dict, commits: list[str]) ->
 
 
 def measured_commits(rows: list[dict], inputs: dict) -> set[str]:
-    """Commits with a recording of this selection that finished every language."""
+    """Commits with a recording of this selection that finished every current language."""
     keys = ("source_roots", "analyzer", "inclusion_policy", "scope")
     finished = {"complete", "not_applicable"}
     recordings = {}
@@ -463,12 +463,11 @@ def measured_commits(rows: list[dict], inputs: dict) -> set[str]:
             continue
         if row["status"] == "started":
             if all(row.get(key) == inputs[key] for key in keys):
-                recordings[identifier] = (row["commit"], set(row["languages"]), set())
+                recordings[identifier] = (row["commit"], set())
         elif identifier in recordings and row["status"] in finished:
-            recordings[identifier][2].add(row["language"])
-    return {
-        commit for commit, expected, done in recordings.values() if expected <= done
-    }
+            recordings[identifier][1].add(row["language"])
+    expected = set(inputs["languages"])
+    return {commit for commit, done in recordings.values() if expected <= done}
 
 
 def backfill_commits(

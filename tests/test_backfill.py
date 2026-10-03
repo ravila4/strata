@@ -54,6 +54,12 @@ def test_recording_with_other_roots_does_not_count():
     assert recorder.measured_commits(rows, INPUTS) == set()
 
 
+def test_recording_missing_a_newly_supported_language_is_retried():
+    older = {"python": "complete", "javascript": "not_applicable"}
+    rows = recording("a", "1", older)
+    assert recorder.measured_commits(rows, INPUTS) == set()
+
+
 def test_later_failure_does_not_undo_earlier_success():
     rows = recording("a", "1", FINISHED) + recording(
         "a", "2", FINISHED | {"rust": "failed"}
