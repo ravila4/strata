@@ -377,9 +377,11 @@ test('syntax highlighting covers a normal large source file and escapes source m
   assert.ok(!markup.includes('<img'));
  }
 });
-test('syntax highlighting uses plain text for oversized files',()=>{
- assert.equal(app.sourceMarkup('x'.repeat(128001),'rust',highlighter),null);
- assert.equal(app.sourceMarkup('x\n'.repeat(4001),'rust',highlighter),null);
+test('syntax highlighting covers every file the server previews',()=>{
+ // The server caps previews at 256 KiB and 10,000 lines.
+ const source='f(1,2,3,4,5,6,7,8,9,0,1)\n'.repeat(10000);
+ assert.ok(app.sourceMarkup(source,'python',highlighter).includes('hljs-number'));
+ assert.equal(app.sourceMarkup(source,null,highlighter),null);
 });
 
 test('recording selection never fills missing language results from another attempt',()=>{

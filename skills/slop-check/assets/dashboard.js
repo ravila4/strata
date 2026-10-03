@@ -210,10 +210,9 @@ function fileMeasurements(details, metric) {
   return values;
 }
 
+// Server preview limits bound the input, so any previewed file highlights.
 function sourceMarkup(text, language, highlighter) {
-  if(text.length>128000 || text.split('\n').length>4000 || !highlighter?.getLanguage(language)) return null;
-  const markup=highlighter.highlight(text,{language}).value;
-  return markup.length<=1000000 && (markup.match(/<span/g)||[]).length<=20000?markup:null;
+  return highlighter?.getLanguage(language)?highlighter.highlight(text,{language}).value:null;
 }
 
 function sourceHeat(source, lineCount, metric) {
@@ -535,7 +534,6 @@ if (typeof document !== 'undefined') {
     if(!sourceContext) return;
     const metric=$('source-metric').value,values=fileMeasurements(sourceContext.details,metric);
     const max=[...values.values()].reduce((max,value)=>Math.max(max,value || 0),0);
-    $('source-files-caption').textContent=`Numbers show recorded metrics · ${explorerMetrics[metric].label}`;
     for(const [path,row] of treeFiles) {
       const value=values.get(path);
       row.value.textContent=value==null?'':format(value);
@@ -728,7 +726,7 @@ if (typeof document !== 'undefined') {
       const code=$('source-code');code.textContent=body.text;
       const markup=sourceMarkup(body.text,body.language,window.hljs);
       if(markup!==null) code.innerHTML=markup;
-      $('source-status').textContent=markup!==null?'':window.hljs?.getLanguage(body.language)?'Plain text shown; syntax highlighting limit reached.':'';
+      $('source-status').textContent='';
       recolorSource();
       const row=$('source-gutter').children[Math.max(0,(target.line||1)-1)];
       if(row) row.scrollIntoView({block:'center'});
@@ -873,7 +871,7 @@ if (typeof document !== 'undefined') {
     }
     $('function-title').textContent=selectedFile?'Functions in '+selectedFile:'Functions';
     $('clear-file').hidden=!selectedFile;
-    $('file-count').textContent=`Showing ${visibleFiles.length} of ${files.length} files; share within open directory`;
+    $('file-count').textContent=`Showing ${visibleFiles.length} of ${files.length} files`;
     $('function-count').textContent=`Showing ${visibleFunctions.length} of ${functions.length} functions`;
   }
   function chooseFile(path) {

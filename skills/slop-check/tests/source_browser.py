@@ -275,9 +275,7 @@ def check_file_browser(page, width):
     assert page.locator("#source-metric").input_value() == "verbosity"
     assert page.locator("#source-gutter .hot").count() == 0
     assert "Not measured" in page.locator("#source-legend").inner_text()
-    assert (
-        "syntax highlighting limit" not in page.locator("#source-status").inner_text()
-    )
+    assert page.locator("#source-status").inner_text() == ""
     assert not page.evaluate("window.sourceInjection===true")
     if width < 600:
         assert not files.is_visible()

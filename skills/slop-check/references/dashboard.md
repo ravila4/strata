@@ -161,8 +161,8 @@ of flagged source lines. Measurements recorded without line locations display
 an unavailable notice for that metric; they do not infer locations from counts.
 
 Files over 256 KiB or 10,000 lines, binary content, symlinks, submodules and unavailable Git objects
-cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
-text with the metric gutter. Excessive highlighting markup also uses plain text.
+cannot be previewed. Every previewed file in a supported language is highlighted;
+other text displays plain with the metric gutter.
 Source and file navigation stay available while new recordings or backfills
 arrive; the window names the commit it shows. Measurements must include recorded
 line locations for metric highlighting.
