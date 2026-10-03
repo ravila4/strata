@@ -54,6 +54,11 @@ def test_recording_with_other_roots_does_not_count():
     assert recorder.measured_commits(rows, INPUTS) == set()
 
 
+def test_recording_under_the_info_severity_policy_is_retried():
+    rows = recording("a", "1", FINISHED, inclusion_policy="tracked-source-v1")
+    assert recorder.measured_commits(rows, INPUTS) == set()
+
+
 def test_recording_missing_a_newly_supported_language_is_retried():
     older = {"python": "complete", "javascript": "not_applicable"}
     rows = recording("a", "1", older)

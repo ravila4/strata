@@ -35,8 +35,10 @@ or missing language never falls back to an older success.
 The plots show source lines, cyclomatic and cognitive erosion, function
 complexity (median, 90th percentile, maximum), verbosity, flagged lines, and
 scan duration. Python verbosity counts the union of cloned, AST-flagged, and
-structural-rule lines; the component counts overlap, so don't add them. Rust
-and JavaScript count clone lines only.
+structural-rule lines; the component counts overlap, so don't add them. AST
+rules follow scb-check's defaults: warning level only, and `# scbc ignore` or
+`# scbc boundary` comments suppress findings. Rust and JavaScript count clone
+lines only.
 
 The sunburst shows the selected commit's directories as rings. Tap a directory
 to open it, the center to go up, or Reset view to see everything. Tap a file to

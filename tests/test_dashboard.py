@@ -68,22 +68,10 @@ def test_inconsistent_details_are_rejected(mutation):
         recorder.validate_details(details() | mutation, aggregate(), ["src/main.rs"])
 
 
-@pytest.mark.parametrize(
-    "language,source",
-    [
-        ("rust", "fn decision(x: bool) -> i32 {\n if x { 1 } else { 0 }\n}\n"),
-        ("python", "def decision(x):\n    if x:\n        return 1\n    return 0\n"),
-        (
-            "javascript",
-            "function decision(x) {\n if (x) { return 1; }\n return 0;\n}\n",
-        ),
-    ],
-)
-def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
+def analyze(tmp_path, path, source):
+    """Run strata's analyzer and scb-check's CLI defaults on one source file."""
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    extension = {"rust": ".rs", "python": ".py", "javascript": ".js"}[language]
-    path = "decision" + extension
     (snapshot / path).write_text(source)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps([path]))
@@ -111,13 +99,29 @@ def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
             "--config",
             str(config),
             "--report",
-            "--include-all",
         ],
         capture_output=True,
         text=True,
     )
     assert json.loads(result.stdout) == json.loads(cli.stdout)
-    measured = json.loads(detail_path.read_text())
+    return json.loads(cli.stdout), json.loads(detail_path.read_text())
+
+
+@pytest.mark.parametrize(
+    "language,source",
+    [
+        ("rust", "fn decision(x: bool) -> i32 {\n if x { 1 } else { 0 }\n}\n"),
+        ("python", "def decision(x):\n    if x:\n        return 1\n    return 0\n"),
+        (
+            "javascript",
+            "function decision(x) {\n if (x) { return 1; }\n return 0;\n}\n",
+        ),
+    ],
+)
+def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
+    extension = {"rust": ".rs", "python": ".py", "javascript": ".js"}[language]
+    path = "decision" + extension
+    aggregate, measured = analyze(tmp_path, path, source)
     assert measured["files"][0]["verbosity_flagged_lines"] == sorted(
         set(measured["files"][0]["verbosity_flagged_lines"])
     )
@@ -129,12 +133,24 @@ def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
     assert measured["functions"][0]["path"] == path
     assert (
         sum(file["verbosity_flagged_loc"] for file in measured["files"])
-        == json.loads(cli.stdout)["verbosity_flagged_loc"]
+        == aggregate["verbosity_flagged_loc"]
     )
     assert (
-        sum(file["clone_loc"] for file in measured["files"])
-        == json.loads(cli.stdout)["clone_loc"]
+        sum(file["clone_loc"] for file in measured["files"]) == aggregate["clone_loc"]
     )
+
+
+def test_verbosity_counts_warning_rules_but_not_info_rules(tmp_path):
+    source = (
+        "def pick(items, default=None):\n"
+        "    if default is None:\n"
+        "        default = 0\n"
+        "    if len(items) == 0:\n"
+        "        return default\n"
+        "    return items[0]\n"
+    )
+    _, measured = analyze(tmp_path, "pick.py", source)
+    assert measured["files"][0]["verbosity_flagged_lines"] == [4]
 
 
 def row(commit, report, timestamp, policy="tracked-source-v1"):
