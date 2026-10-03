@@ -33,7 +33,7 @@ The hook measures the committed snapshot, not staged or unstaged edits. Runtime
 scales with total source size, not the diff. Each language scan has a 60-second
 tool-version probe and a 120-second analysis timeout.
 
-After `uv tool upgrade strata`, new scans use the new version; let active scans
+After `uv tool upgrade git-strata`, new scans use the new version; let active scans
 finish first. If the saved interpreter disappears, for example after
 reinstalling Strata under another Python, the hook logs to `.strata/worker.log`
 and exits zero. Rerun `strata hook install`.

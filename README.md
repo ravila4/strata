@@ -9,21 +9,24 @@ over time. Browse directories and files, follow changes across commits, and open
 any measurement's source at that commit, with syntax highlighting and metric
 hotspots.
 
-[![Strata's directory explorer and commit timeline](docs/images/dashboard.png)](docs/images/dashboard.png)
+[![Strata's directory explorer and commit timeline](https://raw.githubusercontent.com/ravila4/strata/main/docs/images/dashboard.png)](https://raw.githubusercontent.com/ravila4/strata/main/docs/images/dashboard.png)
 
 *Strata measuring its own source across ten commits.*
 
-[![Commit source with syntax highlighting, complexity hotspots, and a minimap](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
+[![Commit source with syntax highlighting, complexity hotspots, and a minimap](https://raw.githubusercontent.com/ravila4/strata/main/docs/images/source-hotspots.png)](https://raw.githubusercontent.com/ravila4/strata/main/docs/images/source-hotspots.png)
 
 The source window shades function ranges by the selected metric. The minimap
 shows hotspots across the file and lets you jump to them.
 
 ## Setup
 
-Requires Git and [uv](https://docs.astral.sh/uv/). Install the `strata` command:
+Requires Git and Python 3.12+. Install the `strata` command with
+[uv](https://docs.astral.sh/uv/) or pip:
 
 ```sh
-uv tool install git+https://github.com/ravila4/strata.git
+uv tool install git-strata
+# or
+pip install git-strata
 ```
 
 In a project with source under `src`, install the commit hook and record the
@@ -58,7 +61,7 @@ Commands act on the current repository; pass `--repo` for another. See
 [commit recording](docs/recording.md) and
 [dashboard usage](docs/dashboard.md) for details.
 
-After `uv tool upgrade strata`, restart running servers.
+After `uv tool upgrade git-strata`, restart running servers.
 
 ## Agent skill
 

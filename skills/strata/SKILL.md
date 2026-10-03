@@ -21,7 +21,7 @@ live dashboard. A high score means "worth a look", not "bad code".
 Commands act on the current repository; pass `--repo` for another. Separate
 test files, fixtures, and vendored code are excluded; inline tests are kept. Once a hook is
 installed, `scan` and `backfill` reuse its roots. If `strata` is missing, ask
-before installing it (`uv tool install git+https://github.com/ravila4/strata.git`).
+before installing it (`uv tool install git-strata`).
 
 Scan and serve whenever metrics are requested. Install the hook or the macOS
 service only when the user asks for automation. A metric check

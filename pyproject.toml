@@ -1,11 +1,30 @@
 [project]
-name = "strata"
+name = "git-strata"
 version = "0.1.0"
 description = "Record code metrics from Git commits and explore them in a live dashboard"
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ricardo Avila", email = "ravila@protonmail.com" }]
 requires-python = ">=3.12"
-dependencies = ["plotly==6.3.1", "scb-check==0.2.0"]
+keywords = ["code-metrics", "complexity", "git", "dashboard", "scb-check"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = ["plotly>=6.3,<7", "scb-check==0.2.0"]
+
+[project.urls]
+Homepage = "https://github.com/ravila4/strata"
+Repository = "https://github.com/ravila4/strata"
+Issues = "https://github.com/ravila4/strata/issues"
 
 [project.scripts]
 strata = "strata.cli:main"
@@ -16,3 +35,6 @@ dev = ["pytest", "ruff==0.14.3"]
 [build-system]
 requires = ["uv_build>=0.8,<0.11"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "strata"
