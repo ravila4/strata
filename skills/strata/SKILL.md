@@ -13,7 +13,7 @@ live dashboard. A high score means "worth a look", not "bad code".
 | Command | Does |
 |---|---|
 | `strata scan [REV] --source-root DIR` | Measure one commit (default `HEAD`) |
-| `strata backfill [REV] --source-root DIR` | Measure unmeasured first-parent commits (default `main`); `--since DATE`, `--every N` |
+| `strata backfill [REV] --source-root DIR` | Measure unmeasured first-parent commits (default: detected default branch); `--since DATE`, `--every N` |
 | `strata serve [--commit REV ...]` | Serve the dashboard on loopback (default port 8766) |
 | `strata hook install --source-root DIR` / `remove` | Record every commit in the background |
 | `strata service install` / `remove` | Persistent macOS dashboard, optionally over Tailscale |
