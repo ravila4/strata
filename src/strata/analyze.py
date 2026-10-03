@@ -8,7 +8,7 @@ from pathlib import Path
 from scb_check.pipeline import analyze_files
 from scb_check.reporting.score import compute_report
 
-from record_commit import validate_details
+from strata.recorder import validate_details
 
 
 def main() -> None:

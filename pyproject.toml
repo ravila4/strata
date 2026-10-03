@@ -1,0 +1,18 @@
+[project]
+name = "strata"
+version = "0.1.0"
+description = "Record code metrics from Git commits and explore them in a live dashboard"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["plotly==6.3.1", "scb-check==0.2.0"]
+
+[project.scripts]
+strata = "strata.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff==0.14.3"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.11"]
+build-backend = "uv_build"

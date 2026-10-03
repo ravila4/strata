@@ -1,17 +1,16 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["playwright", "plotly==6.3.1", "pytest"]
-# ///
 """Rendered mixed-language recording navigation and source regression checks."""
 
 import json
+import sys
 import tempfile
 import threading
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from test_hooks import git, load
+from strata import recorder
+from strata import server as server_module
+from test_hooks import git
 
 
 def check_live_following(browser, recorder, server_module) -> None:
@@ -25,7 +24,7 @@ def check_live_following(browser, recorder, server_module) -> None:
         (repo / "src/main.py").write_text("def decision(x):\n    return x + 1\n")
         git(repo, "add", ".")
         git(repo, "commit", "-qm", "initial")
-        output = repo / ".slop-check"
+        output = repo / ".strata"
         server = server_module.make_server(repo, 0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -36,7 +35,7 @@ def check_live_following(browser, recorder, server_module) -> None:
             for subject in ("first", "second"):
                 if subject == "second":
                     git(repo, "commit", "--allow-empty", "-qm", subject)
-                recorder.record_all(repo, output, ["src"], "uvx")
+                recorder.record_all(repo, output, ["src"], sys.executable)
                 commit = git(repo, "rev-parse", "HEAD")[:8]
                 page.wait_for_function(
                     "commit=>!document.getElementById('recording-coverage').hidden"
@@ -57,8 +56,6 @@ def check_live_following(browser, recorder, server_module) -> None:
 
 
 def main() -> None:
-    recorder = load("record_commit")
-    server_module = load("serve_dashboard")
     with tempfile.TemporaryDirectory() as temporary:
         repo = Path(temporary)
         git(repo, "init", "-q")
@@ -70,11 +67,11 @@ def main() -> None:
         (repo / "web/main.js").write_text("function decision(x) { return x + 1; }\n")
         git(repo, "add", ".")
         git(repo, "commit", "-qm", "initial mixed source")
-        output = repo / ".slop-check"
-        recorder.record_all(repo, output, ["src", "web"], "uvx")
+        output = repo / ".strata"
+        recorder.record_all(repo, output, ["src", "web"], sys.executable)
         first = git(repo, "rev-parse", "HEAD")
         git(repo, "commit", "--allow-empty", "-qm", "second")
-        recorder.record_all(repo, output, ["src", "web"], "uvx")
+        recorder.record_all(repo, output, ["src", "web"], sys.executable)
         rows = [
             json.loads(line)
             for line in (output / "history.jsonl").read_text().splitlines()

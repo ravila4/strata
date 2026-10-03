@@ -1,6 +1,5 @@
 """Record committed source metrics without affecting commit success."""
 
-import argparse
 import fcntl
 import json
 import math
@@ -23,6 +22,7 @@ EXTENSIONS = {
 }
 ANALYZER = "scb-check==0.2.0"
 POLICY = "tracked-source-v1"
+SETTINGS_FORMAT = 3
 SCOPE = "separate test files excluded; inline tests retained"
 
 
@@ -39,12 +39,12 @@ def canonical_roots(roots: list[str]) -> list[str]:
 
 
 def selection(settings: dict) -> dict:
-    if settings.get("format") != 2:
+    if settings.get("format") != SETTINGS_FORMAT:
         raise ValueError("Unsupported recorder settings; reinstall the hook")
     return {
         "source_roots": canonical_roots(settings["source_roots"]),
         "languages": list(EXTENSIONS),
-        "uvx": settings["uvx"],
+        "python": settings["python"],
         "analyzer": ANALYZER,
         "inclusion_policy": POLICY,
         "scope": SCOPE,
@@ -59,7 +59,9 @@ def spawn_worker(repo: Path, output: Path) -> None:
         subprocess.Popen(
             [
                 sys.executable,
-                str(Path(__file__).with_name("queue_commit.py")),
+                "-I",
+                "-m",
+                "strata.worker",
                 "--worker",
                 "--output",
                 str(output),
@@ -248,7 +250,7 @@ def record(
     output: Path,
     roots: list[str],
     language: str,
-    uv: str,
+    python: str,
     commit: str | None = None,
     recording_id: str | None = None,
 ) -> None:
@@ -291,12 +293,12 @@ def record(
         else:
             config = directory / "scb-check.toml"
             config.write_text("exclude = []\n")
+            # Isolated mode keeps the measured repository off the import path.
             command = [
-                uv,
-                "--from",
-                "scb-check==0.2.0",
-                "python",
-                str(Path(__file__).with_name("analyze_snapshot.py")),
+                python,
+                "-I",
+                "-m",
+                "strata.analyze",
                 "--snapshot",
                 str(snapshot),
                 "--manifest",
@@ -307,12 +309,9 @@ def record(
             (directory / "command.json").write_text(json.dumps(command) + "\n")
             env = os.environ.copy()
             env.pop("SCB_CHECK_EXTRA_SLOP_RULES", None)
-            # Populate the uv environment first so install chatter cannot mask analyzer diagnostics.
             versions_command = [
-                uv,
-                "--from",
-                "scb-check==0.2.0",
-                "python",
+                python,
+                "-I",
                 "-c",
                 'import importlib.metadata as m,json; print(json.dumps({d.metadata["Name"]:d.version for d in m.distributions()}))',
             ]
@@ -364,7 +363,7 @@ def record(
     (directory / "summary.json").write_text(json.dumps(row, indent=2) + "\n")
     append_history(output, row)
     print(
-        f"slop-check: {row['status']} for {commit[:12]} ({row['duration_seconds']:.1f}s); {output / 'history.jsonl'}",
+        f"strata: {row['status']} for {commit[:12]} ({row['duration_seconds']:.1f}s); {output / 'history.jsonl'}",
         file=sys.stderr,
     )
 
@@ -373,7 +372,7 @@ def record_all(
     repo: Path,
     output: Path,
     roots: list[str],
-    uv: str,
+    python: str,
     commit: str | None = None,
     languages: list[str] | None = None,
 ) -> None:
@@ -402,7 +401,7 @@ def record_all(
                 output,
                 roots,
                 language,
-                uv,
+                python,
                 commit=commit,
                 recording_id=started["recording_id"],
             )
@@ -430,7 +429,7 @@ def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
                 repo,
                 output,
                 inputs["source_roots"],
-                inputs["uvx"],
+                inputs["python"],
                 commit=commit,
                 languages=inputs["languages"],
             )
@@ -446,34 +445,8 @@ def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
                     spawn_worker(repo, output)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--source-root", action="append")
-    parser.add_argument("--commit", default="HEAD")
-    args = parser.parse_args()
-    repo = Path(
-        git(args.repo.resolve(), "rev-parse", "--show-toplevel").decode().strip()
-    )
-    commit = (
-        git(repo, "rev-parse", "--verify", f"{args.commit}^{{commit}}").decode().strip()
-    )
-    output = repo / ".slop-check"
-    if args.source_root:
-        try:
-            roots = canonical_roots(args.source_root)
-        except ValueError as error:
-            parser.error(str(error))
-        uvx = shutil.which("uvx")
-        if uvx is None:
-            parser.error("uvx is required; install uv before recording")
-        inputs = selection({"format": 2, "source_roots": roots, "uvx": uvx})
-    else:
-        settings = json.loads((output / "settings.json").read_text())
-        try:
-            inputs = selection(settings)
-        except ValueError as error:
-            parser.error(str(error))
+def exclude_output(repo: Path) -> None:
+    """Keep local measurements out of Git status without editing .gitignore."""
     exclude = Path(
         git(repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
         .decode()
@@ -481,14 +454,32 @@ def main() -> None:
     )
     exclude.parent.mkdir(parents=True, exist_ok=True)
     current = exclude.read_text() if exclude.exists() else ""
-    if "/.slop-check/" not in current.splitlines():
+    if "/.strata/" not in current.splitlines():
         with exclude.open("a") as stream:
-            stream.write("\n/.slop-check/\n")
-    try:
-        record_manual(repo, output, inputs, commit)
-    except ValueError as error:
-        parser.error(str(error))
+            stream.write("\n/.strata/\n")
 
 
-if __name__ == "__main__":
-    main()
+def scan(repo: Path, revision: str, roots: list[str] | None) -> None:
+    """Measure one revision with explicit roots or the installed hook settings."""
+    repo = Path(git(repo.resolve(), "rev-parse", "--show-toplevel").decode().strip())
+    commit = (
+        git(repo, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
+        .decode()
+        .strip()
+    )
+    output = repo / ".strata"
+    if roots:
+        inputs = selection(
+            {
+                "format": SETTINGS_FORMAT,
+                "source_roots": canonical_roots(roots),
+                "python": sys.executable,
+            }
+        )
+    else:
+        settings_path = output / "settings.json"
+        if not settings_path.exists():
+            raise ValueError("Pass --source-root or install the hook first")
+        inputs = selection(json.loads(settings_path.read_text()))
+    exclude_output(repo)
+    record_manual(repo, output, inputs, commit)

@@ -1,6 +1,5 @@
 """Install or remove a persistent local dashboard server on macOS."""
 
-import argparse
 import errno
 import hashlib
 import json
@@ -35,8 +34,8 @@ def run(command: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 def validate_agent_ownership(repo: Path, settings: dict, plist_path: Path) -> None:
     """Require the local configuration and launch agent to identify the same service."""
-    label = "dev.slop-check." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
-    output = repo / ".slop-check"
+    label = "dev.strata." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
+    output = repo / ".strata"
     try:
         if (
             output.is_symlink()
@@ -101,7 +100,7 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
     """Install a launch agent and optionally an isolated Tailscale mount."""
     if sys.platform != "darwin":
         raise ValueError(
-            "Persistent installation supports macOS; run serve_dashboard.py in the foreground elsewhere"
+            "Persistent installation supports macOS; run strata serve in the foreground elsewhere"
         )
     repo = repo.resolve()
     if (
@@ -110,10 +109,9 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
         or mount == "/"
     ):
         raise ValueError("Use a port from 1024 to 65535 and a non-root URL path")
-    uv = shutil.which("uv")
     tail = shutil.which("tailscale")
-    if uv is None or (tailscale and tail is None):
-        raise ValueError("uv and, when requested, tailscale must be installed")
+    if tailscale and tail is None:
+        raise ValueError("tailscale must be installed for a tailnet mount")
     proxy = f"http://127.0.0.1:{port}"
     original_mount = None
     if tailscale:
@@ -127,10 +125,10 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
             ),
             None,
         )
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir(exist_ok=True)
     settings_path = output / "server-settings.json"
-    label = "dev.slop-check." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
+    label = "dev.strata." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
     domain = f"gui/{os.getuid()}"
     previous_bytes = settings_path.read_bytes() if settings_path.exists() else None
     if settings_path.exists():
@@ -147,15 +145,14 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
         with socket.socket() as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
-    scripts = Path(__file__).resolve().parent
-    runtime = str(scripts.parent)
-    run([uv, "run", "--script", str(scripts / "serve_dashboard.py"), "--help"])
+    runtime = str(Path(__file__).resolve().parent)
+    # Isolated mode keeps the served repository off the import path.
     command = [
-        uv,
-        "run",
-        "--offline",
-        "--script",
-        str(scripts / "serve_dashboard.py"),
+        sys.executable,
+        "-I",
+        "-m",
+        "strata",
+        "serve",
         "--repo",
         str(repo),
         "--port",
@@ -268,10 +265,10 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
 def remove(repo: Path) -> None:
     """Remove only this repository's launch agent and matching proxy mount."""
     repo = repo.resolve()
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     path = output / "server-settings.json"
     settings = json.loads(path.read_text())
-    label = "dev.slop-check." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
+    label = "dev.strata." + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
     plist_path = Path.home() / "Library/LaunchAgents" / f"{label}.plist"
     validate_agent_ownership(repo, settings, plist_path)
     if settings["tailscale"]:
@@ -284,26 +281,3 @@ def remove(repo: Path) -> None:
     run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], check=False)
     plist_path.unlink()
     path.unlink()
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=8766)
-    parser.add_argument(
-        "--mount", help="Tailnet URL path; defaults to /slop/<repository name>"
-    )
-    parser.add_argument("--tailscale", action="store_true")
-    parser.add_argument("--remove", action="store_true")
-    args = parser.parse_args()
-    if args.remove:
-        remove(args.repo)
-    else:
-        mount = args.mount or "/slop/" + re.sub(
-            r"[^a-zA-Z0-9_-]", "-", args.repo.resolve().name
-        )
-        install(args.repo, args.port, mount.rstrip("/"), args.tailscale)
-
-
-if __name__ == "__main__":
-    main()

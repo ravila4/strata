@@ -1,6 +1,5 @@
-"""Install a repository-local advisory SlopCodeBench hook."""
+"""Install a repository-local advisory hook that records each commit."""
 
-import argparse
 import hashlib
 import json
 import os
@@ -11,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from record_commit import canonical_roots
+from strata.recorder import SETTINGS_FORMAT, canonical_roots, exclude_output
 
 
 def git(repo: Path, *args: str) -> str:
@@ -28,10 +27,7 @@ def install(repo: Path, roots: list[str]) -> None:
             "Install from the primary checkout; local hook configuration is shared with linked worktrees"
         )
     roots = canonical_roots(roots)
-    uvx = shutil.which("uvx")
-    if uvx is None:
-        raise ValueError("uvx is required; install uv before installing the hook")
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     hooks = output / "hooks"
     settings_path = output / "settings.json"
     paths = [output, settings_path, hooks]
@@ -77,7 +73,7 @@ def install(repo: Path, roots: list[str]) -> None:
                     or json.loads((output / "server-settings.json").read_text())[
                         "label"
                     ]
-                    == "dev.slop-check."
+                    == "dev.strata."
                     + hashlib.sha256(str(repo).encode()).hexdigest()[:12]
                 )
             )
@@ -85,7 +81,7 @@ def install(repo: Path, roots: list[str]) -> None:
             owned = False
         if not owned:
             raise ValueError(
-                "Existing .slop-check directory is not owned by this installer"
+                "Existing .strata directory is not owned by this installer"
             )
     if settings_path.exists():
         settings = json.loads(settings_path.read_text())
@@ -126,15 +122,7 @@ def install(repo: Path, roots: list[str]) -> None:
         wrapper = hooks / name
         wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(original)} "$@"\n')
         wrapper.chmod(0o755)
-    runtime = Path(__file__).resolve().parents[1]
-    settings.update(
-        source_roots=roots,
-        format=2,
-        uvx=uvx,
-        python=sys.executable,
-        source_runtime=str(runtime),
-    )
-    settings.pop("language", None)
+    settings.update(source_roots=roots, format=SETTINGS_FORMAT, python=sys.executable)
     with tempfile.NamedTemporaryFile(mode="w", dir=output, delete=False) as stream:
         json.dump(settings, stream, indent=2)
         stream.write("\n")
@@ -143,32 +131,21 @@ def install(repo: Path, roots: list[str]) -> None:
     original_post = settings["previous_hooks"].get("post-commit")
     preserved_post = f'{shlex.quote(original_post)} "$@"\n' if original_post else ""
     post = hooks / "post-commit"
-    queue = shlex.quote(str(runtime / "scripts/queue_commit.py"))
+    python = shlex.quote(sys.executable)
     log = shlex.quote(str(output / "worker.log"))
-    required = [
-        runtime / "scripts" / name
-        for name in ("queue_commit.py", "record_commit.py", "analyze_snapshot.py")
-    ]
-    missing = " || ".join(f"[ ! -r {shlex.quote(str(path))} ]" for path in required)
-    error = shlex.quote(f"slop-check: shared runtime missing or incomplete: {runtime}")
+    error = shlex.quote(f"strata: interpreter missing: {sys.executable}")
+    # Isolated mode keeps the committing repository off the import path.
     post.write_text(
         "#!/bin/sh\n"
         + preserved_post
-        + f"if {missing}; then\n"
-        + f"  printf '%s\\n' {error} >> {log}\n"
+        + f"if [ -x {python} ]; then\n"
+        + f"  {python} -I -m strata.worker --repo . --output {shlex.quote(str(output))} >> {log} 2>&1\n"
         + "else\n"
-        + f"  {shlex.quote(sys.executable)} {queue} --repo . --output {shlex.quote(str(output))} >> {log} 2>&1\n"
+        + f"  printf '%s\\n' {error} >> {log}\n"
         + "fi\nexit 0\n"
     )
     post.chmod(0o755)
-    exclude = Path(
-        git(repo, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
-    )
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    current = exclude.read_text() if exclude.exists() else ""
-    if "/.slop-check/" not in current.splitlines():
-        with exclude.open("a") as stream:
-            stream.write("\n/.slop-check/\n")
+    exclude_output(repo)
     git(repo, "config", "--local", "core.hooksPath", str(hooks))
     print(f"Installed advisory post-commit hook. History: {output / 'history.jsonl'}")
 
@@ -180,7 +157,7 @@ def remove(repo: Path) -> None:
     common_dir = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if Path(git_dir).resolve() != Path(common_dir).resolve():
         raise ValueError("Remove from the primary checkout")
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     hooks = output / "hooks"
     settings = json.loads((output / "settings.json").read_text())
     if git(repo, "rev-parse", "--path-format=absolute", "--git-path", "hooks") != str(
@@ -197,21 +174,3 @@ def remove(repo: Path) -> None:
     shutil.rmtree(hooks)
     # Retain configuration for workers already processing queued commits.
     print(f"Removed advisory hook. Retained measurements: {output}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--source-root", action="append")
-    parser.add_argument("--remove", action="store_true")
-    args = parser.parse_args()
-    if args.remove:
-        remove(args.repo)
-    else:
-        if not args.source_root:
-            parser.error("--source-root is required for installation")
-        install(args.repo, args.source_root)
-
-
-if __name__ == "__main__":
-    main()

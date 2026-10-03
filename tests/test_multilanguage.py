@@ -6,7 +6,8 @@ import sys
 import pytest
 
 import test_hooks
-from test_hooks import SCRIPTS, git, load
+from strata import dashboard, hooks, recorder, server, worker
+from test_hooks import git
 from test_dashboard import row
 
 repo = test_hooks.repo
@@ -19,22 +20,21 @@ def history(output):
 
 
 def test_roots_are_canonical_and_language_is_automatic(repo):
-    installer = load("install_hook")
-    installer.install(repo, ["src/.", "src/sub", "src"])
-    settings = json.loads((repo / ".slop-check/settings.json").read_text())
+    hooks.install(repo, ["src/.", "src/sub", "src"])
+    settings = json.loads((repo / ".strata/settings.json").read_text())
     assert settings["source_roots"] == ["src"]
     assert "language" not in settings
     # The dashboard matches recordings to scopes by plain string order.
-    assert load("record_commit").canonical_roots(["lib/x", "lib-y"]) == [
+    assert recorder.canonical_roots(["lib/x", "lib-y"]) == [
         "lib-y",
         "lib/x",
     ]
-    assert settings["format"] == 2
+    assert settings["format"] == 3
 
 
 def test_old_settings_require_reinstall():
     with pytest.raises(ValueError, match="reinstall"):
-        load("record_commit").selection(
+        recorder.selection(
             {"source_roots": ["src"], "language": "python", "uvx": "uvx"}
         )
 
@@ -48,8 +48,8 @@ def test_mixed_commit_records_all_languages_with_native_analyzer(repo):
     git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "mixed")
     sha = git(repo, "rev-parse", "HEAD")
     (repo / "src/main.py").write_text("dirty invalid source")
-    output = repo / ".slop-check"
-    load("record_commit").record_all(repo, output, ["src"], "uvx", commit=sha)
+    output = repo / ".strata"
+    recorder.record_all(repo, output, ["src"], sys.executable, commit=sha)
     rows = history(output)
     assert rows[0]["status"] == "started"
     assert rows[0]["languages"] == ["python", "javascript", "rust"]
@@ -64,7 +64,6 @@ def test_mixed_commit_records_all_languages_with_native_analyzer(repo):
 
 
 def test_unexpected_language_failure_does_not_stop_remaining_results(repo, monkeypatch):
-    recorder = load("record_commit")
     original = recorder.record
 
     def fail_python(*args, **kwargs):
@@ -73,7 +72,7 @@ def test_unexpected_language_failure_does_not_stop_remaining_results(repo, monke
         return original(*args, **kwargs)
 
     monkeypatch.setattr(recorder, "record", fail_python)
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     recorder.record_all(repo, output, ["empty"], "/missing/uv")
     assert [(r.get("language"), r["status"]) for r in history(output)[1:]] == [
         ("python", "failed"),
@@ -83,12 +82,11 @@ def test_unexpected_language_failure_does_not_stop_remaining_results(repo, monke
 
 
 def test_enqueue_captures_selection_before_settings_change(repo, monkeypatch):
-    load("install_hook").install(repo, ["src"])
-    queue = load("queue_commit")
-    monkeypatch.setattr(queue, "spawn_worker", lambda *args: None)
-    output = repo / ".slop-check"
-    queue.enqueue(repo, output)
-    job = queue.read_queue(output)["pending"]
+    hooks.install(repo, ["src"])
+    monkeypatch.setattr(worker, "spawn_worker", lambda *args: None)
+    output = repo / ".strata"
+    worker.enqueue(repo, output)
+    job = worker.read_queue(output)["pending"]
     settings_path = output / "settings.json"
     settings = json.loads(settings_path.read_text())
     settings["source_roots"] = ["other"]
@@ -97,22 +95,24 @@ def test_enqueue_captures_selection_before_settings_change(repo, monkeypatch):
     assert job["languages"] == ["python", "javascript", "rust"]
     observed = []
     monkeypatch.setattr(
-        queue, "record_all", lambda *args, **kwargs: observed.append((args, kwargs))
+        worker, "record_all", lambda *args, **kwargs: observed.append((args, kwargs))
     )
-    queue.work(output)
+    worker.work(output)
     assert observed[0][0][2] == ["src"]
     assert observed[0][1]["commit"] == job["commit"]
 
 
 def test_manual_scan_fails_busy_without_starting_attempt(repo):
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir()
     with (output / "worker.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         result = subprocess.run(
             [
                 sys.executable,
-                str(SCRIPTS / "record_commit.py"),
+                "-m",
+                "strata",
+                "scan",
                 "--repo",
                 str(repo),
                 "--source-root",
@@ -150,10 +150,10 @@ def attempt_row(sha, identifier, language, status):
 
 
 def dataset(repo, rows):
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir(exist_ok=True)
     (output / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    return load("dashboard").load_dataset(repo, output)
+    return dashboard.load_dataset(repo, output)
 
 
 def test_latest_recording_does_not_reuse_previous_language_success(repo):
@@ -205,14 +205,12 @@ def test_later_empty_language_does_not_keep_old_success(repo):
 
 
 def test_manual_scan_hands_off_hook_enqueued_during_analysis(repo, monkeypatch):
-    recorder = load("record_commit")
-    queue = load("queue_commit")
-    output = repo / ".slop-check"
-    load("install_hook").install(repo, ["missing"])
-    monkeypatch.setattr(queue, "spawn_worker", lambda *args: None)
+    output = repo / ".strata"
+    hooks.install(repo, ["missing"])
+    monkeypatch.setattr(worker, "spawn_worker", lambda *args: None)
 
     def enqueue_during_scan(*args, **kwargs):
-        queue.enqueue(repo, output)
+        worker.enqueue(repo, output)
         raise RuntimeError("interrupted manual scan")
 
     monkeypatch.setattr(recorder, "record_all", enqueue_during_scan)
@@ -229,7 +227,7 @@ def test_manual_scan_hands_off_hook_enqueued_during_analysis(repo, monkeypatch):
     assert [r["status"] for r in history(output)] == ["started"] + [
         "not_applicable"
     ] * 3
-    test_hooks.wait_for(lambda: queue.read_queue(output)["current"] is None)
+    test_hooks.wait_for(lambda: worker.read_queue(output)["current"] is None)
 
 
 def test_individual_history_is_separate_from_mixed_recording(repo):
@@ -255,7 +253,7 @@ def test_source_for_superseded_recording_is_not_authorized(repo):
     import test_server
 
     sha = test_server.record_source(repo)
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     result = history(output)[0]
     first = start(sha, "a")
     second = start(sha, "b")
@@ -283,7 +281,6 @@ def test_source_for_superseded_recording_is_not_authorized(repo):
             newer_result,
         ],
     )
-    server = load("serve_dashboard")
     query = urlencode(
         {"commit": sha, "path": "src/main.rs", "scope": data["series"][0]["id"]}
     )
@@ -293,12 +290,13 @@ def test_source_for_superseded_recording_is_not_authorized(repo):
 
 
 def test_hook_install_accepts_manual_recording_lock_files(repo):
-    recorder = load("record_commit")
-    output = repo / ".slop-check"
-    inputs = recorder.selection({"format": 2, "source_roots": ["empty"], "uvx": "uvx"})
+    output = repo / ".strata"
+    inputs = recorder.selection(
+        {"format": 3, "source_roots": ["empty"], "python": "/missing/python"}
+    )
     recorder.record_manual(repo, output, inputs, git(repo, "rev-parse", "HEAD"))
     saved = (output / "history.jsonl").read_bytes()
-    load("install_hook").install(repo, ["src"])
+    hooks.install(repo, ["src"])
     assert (output / "history.jsonl").read_bytes() == saved
     assert (output / "settings.json").exists()
 
@@ -306,12 +304,13 @@ def test_hook_install_accepts_manual_recording_lock_files(repo):
 @pytest.mark.parametrize("filename", ["worker.lock", "queue.lock"])
 @pytest.mark.parametrize("kind", ["directory", "symlink"])
 def test_hook_install_rejects_nonregular_manual_lock_files(repo, filename, kind):
-    recorder = load("record_commit")
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     recorder.record_manual(
         repo,
         output,
-        recorder.selection({"format": 2, "source_roots": ["empty"], "uvx": "uvx"}),
+        recorder.selection(
+            {"format": 3, "source_roots": ["empty"], "python": "/missing/python"}
+        ),
         git(repo, "rev-parse", "HEAD"),
     )
     lock_path = output / filename
@@ -321,4 +320,4 @@ def test_hook_install_rejects_nonregular_manual_lock_files(repo, filename, kind)
     else:
         lock_path.symlink_to(repo / "src/main.rs")
     with pytest.raises(ValueError, match="not owned"):
-        load("install_hook").install(repo, ["src"])
+        hooks.install(repo, ["src"])

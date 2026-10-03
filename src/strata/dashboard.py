@@ -8,7 +8,7 @@ from pathlib import Path
 
 from plotly.offline import get_plotlyjs
 
-from record_commit import git, validate_details
+from strata.recorder import git, validate_details
 
 
 def embed_json(value: object) -> str:
@@ -166,7 +166,7 @@ def load_dataset(
 
 def render_dashboard(data: dict) -> str:
     """Embed local dashboard assets and the initial dataset."""
-    assets = Path(__file__).resolve().parents[1] / "assets"
+    assets = Path(__file__).resolve().parent / "assets"
     template = (assets / "dashboard.html").read_text()
     replacements = {
         "__PLOTLY__": get_plotlyjs(),

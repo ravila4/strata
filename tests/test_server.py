@@ -1,21 +1,24 @@
-import importlib
 import json
 import socket
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 import test_hooks
+from strata import recorder, service
+from strata import server as dashboard_server
 
 repo = test_hooks.repo
 
 
 @pytest.fixture
 def server(repo):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     server = module.make_server(repo, 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -32,9 +35,9 @@ def fetch(url, headers=None):
 
 
 def test_comparison_serves_feature_commits_without_changing_checkout(repo):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     base = record_source(repo)
-    history = repo / ".slop-check/history.jsonl"
+    history = repo / ".strata/history.jsonl"
     base_row = history.read_text()
     branch = test_hooks.git(repo, "branch", "--show-current")
     test_hooks.git(repo, "checkout", "-qb", "feature")
@@ -80,7 +83,7 @@ def test_comparison_serves_feature_commits_without_changing_checkout(repo):
 
 
 def test_comparison_deduplicates_commit_aliases(repo):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     commit = test_hooks.git(repo, "rev-parse", "HEAD")
     body, _, data = module.DatasetCache(repo, commits=["HEAD", commit]).snapshot()
     assert json.loads(body)["requested_commits"] == [commit]
@@ -91,9 +94,7 @@ def test_comparison_deduplicates_commit_aliases(repo):
 @pytest.mark.parametrize("revision", ["missing", "--all"])
 def test_comparison_rejects_invalid_commit_references(repo, revision):
     with pytest.raises(subprocess.CalledProcessError):
-        importlib.import_module("serve_dashboard").DatasetCache(
-            repo, commits=[revision]
-        )
+        dashboard_server.DatasetCache(repo, commits=[revision])
 
 
 def test_server_serves_only_dashboard_and_metrics(server):
@@ -113,7 +114,7 @@ def test_new_history_row_refreshes_dataset(server):
     with fetch(url + "/data.json") as response:
         original = json.load(response)
     assert original["repository_path"] == str(repo.resolve())
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir(exist_ok=True)
     row = {
         "commit": test_hooks.git(repo, "rev-parse", "HEAD"),
@@ -121,7 +122,7 @@ def test_new_history_row_refreshes_dataset(server):
         "status": "skipped",
         "superseded_by": "new",
     }
-    test_hooks.load("record_commit").append_history(output, row)
+    recorder.append_history(output, row)
     with fetch(url + "/data.json") as response:
         updated = json.load(response)
     assert updated["revision"] != original["revision"]
@@ -151,7 +152,7 @@ def test_simultaneous_clients_receive_one_consistent_revision(server):
 def test_corrupt_history_returns_error_instead_of_stale_live_data(server):
     url, repo = server
     fetch(url + "/data.json").close()
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir(exist_ok=True)
     (output / "history.jsonl").write_text("invalid\n")
     with pytest.raises(urllib.error.HTTPError) as result:
@@ -160,7 +161,7 @@ def test_corrupt_history_returns_error_instead_of_stale_live_data(server):
 
 
 def test_route_collision_is_rejected_without_changing_other_routes():
-    installer = importlib.import_module("install_server")
+    installer = service
     config = {
         "Web": {
             "host:443": {
@@ -177,7 +178,7 @@ def test_route_collision_is_rejected_without_changing_other_routes():
 
 
 def test_failed_bootstrap_removes_fresh_persistent_state(repo, tmp_path, monkeypatch):
-    installer = importlib.import_module("install_server")
+    installer = service
     home = tmp_path / "home"
     monkeypatch.setattr(installer.Path, "home", lambda: home)
 
@@ -193,28 +194,7 @@ def test_failed_bootstrap_removes_fresh_persistent_state(repo, tmp_path, monkeyp
     with pytest.raises(subprocess.CalledProcessError):
         installer.install(repo, port, "/slop/test", False)
     assert not list((home / "Library/LaunchAgents").glob("*.plist"))
-    assert not (repo / ".slop-check/server-settings.json").exists()
-
-
-def test_dependency_failure_does_not_stop_existing_server(repo, monkeypatch):
-    installer = importlib.import_module("install_server")
-    output = repo / ".slop-check"
-    output.mkdir()
-    (output / "server-settings.json").write_text(
-        json.dumps({"port": 8766, "mount": "/slop/test"})
-    )
-    commands = []
-
-    def run(command, check=True):
-        commands.append(command)
-        if command[0].endswith("/uv"):
-            raise subprocess.CalledProcessError(1, command)
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(installer, "run", run)
-    with pytest.raises(subprocess.CalledProcessError):
-        installer.install(repo, 8766, "/slop/test", False)
-    assert not any(command[:2] == ["launchctl", "bootout"] for command in commands)
+    assert not (repo / ".strata/server-settings.json").exists()
 
 
 def test_tailnet_failure_removes_new_mount_and_launch_agent(
@@ -222,7 +202,7 @@ def test_tailnet_failure_removes_new_mount_and_launch_agent(
 ):
     import io
 
-    installer = importlib.import_module("install_server")
+    installer = service
     monkeypatch.setattr(installer.Path, "home", lambda: tmp_path / "home")
     monkeypatch.setattr(
         installer.shutil, "which", lambda name: "/usr/local/bin/" + name
@@ -235,7 +215,7 @@ def test_tailnet_failure_removes_new_mount_and_launch_agent(
                 {
                     "repository_path": str(repo.resolve()),
                     "source_runtime": str(
-                        installer.Path(installer.__file__).resolve().parents[1]
+                        installer.Path(installer.__file__).resolve().parent
                     ),
                 }
             ).encode()
@@ -280,8 +260,8 @@ def test_tailnet_failure_removes_new_mount_and_launch_agent(
 
 
 def test_changing_tailnet_mode_requires_removal_first(repo, monkeypatch):
-    installer = importlib.import_module("install_server")
-    output = repo / ".slop-check"
+    installer = service
+    output = repo / ".strata"
     output.mkdir()
     (output / "server-settings.json").write_text(
         json.dumps({"port": 8766, "mount": "/slop/test", "tailscale": True})
@@ -301,7 +281,7 @@ def test_changing_tailnet_mode_requires_removal_first(repo, monkeypatch):
 def persistent_installer(tmp_path, monkeypatch):
     import io
 
-    installer = importlib.import_module("install_server")
+    installer = service
     home = tmp_path / "service-home"
     monkeypatch.setattr(installer.Path, "home", lambda: home)
     monkeypatch.setattr(installer.shutil, "which", lambda name: "/bin/" + name)
@@ -330,7 +310,7 @@ def test_persistent_server_uses_shared_runtime_without_copies(
     import plistlib
 
     installer, home, _calls, identity, port = persistent_installer
-    runtime = installer.Path(installer.__file__).resolve().parents[1]
+    runtime = installer.Path(installer.__file__).resolve().parent
     identity.update(repository_path=str(repo.resolve()), source_runtime=str(runtime))
     installer.install(repo, port, "/slop/test", False)
     plist = plistlib.loads(
@@ -339,14 +319,12 @@ def test_persistent_server_uses_shared_runtime_without_copies(
     # Background launch agents run throttled, which slows every request.
     assert plist["ProcessType"] == "Standard"
     args = plist["ProgramArguments"]
-    assert args[args.index("--script") + 1] == str(
-        runtime / "scripts/serve_dashboard.py"
-    )
+    assert args[:5] == [sys.executable, "-I", "-m", "strata", "serve"]
     assert args[args.index("--repo") + 1] == str(repo.resolve())
-    settings = json.loads((repo / ".slop-check/server-settings.json").read_text())
+    settings = json.loads((repo / ".strata/server-settings.json").read_text())
     assert settings["source_runtime"] == str(runtime)
-    assert not (repo / ".slop-check/dashboard-tool").exists()
-    assert not list((repo / ".slop-check").glob("dashboard-stage-*"))
+    assert not (repo / ".strata/dashboard-tool").exists()
+    assert not list((repo / ".strata").glob("dashboard-stage-*"))
 
 
 @pytest.mark.parametrize("field", ["repository_path", "source_runtime"])
@@ -356,12 +334,12 @@ def test_persistent_server_rejects_foreign_endpoint_identity(
     installer, home, _calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     identity[field] = "/foreign"
     with pytest.raises(ValueError, match="identity"):
         installer.install(repo, port, "/slop/test", False)
-    assert not (repo / ".slop-check/server-settings.json").exists()
+    assert not (repo / ".strata/server-settings.json").exists()
     assert not list((home / "Library/LaunchAgents").glob("*.plist"))
 
 
@@ -371,16 +349,16 @@ def test_server_reinstall_restores_previous_configuration_on_failure(
     installer, home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
-    settings_path = repo / ".slop-check/server-settings.json"
+    settings_path = repo / ".strata/server-settings.json"
     plist_path = next((home / "Library/LaunchAgents").glob("*.plist"))
     original_settings, original_plist = (
         settings_path.read_bytes(),
         plist_path.read_bytes(),
     )
-    history = repo / ".slop-check/history.jsonl"
+    history = repo / ".strata/history.jsonl"
     history.write_text("evidence\n")
     identity["source_runtime"] = "/foreign"
     with pytest.raises(ValueError, match="identity"):
@@ -397,7 +375,7 @@ def test_server_reinstall_refuses_changed_launch_agent(repo, persistent_installe
     installer, home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
     plist_path = next((home / "Library/LaunchAgents").glob("*.plist"))
@@ -415,7 +393,7 @@ def test_server_removal_preserves_another_repository(
     repo, persistent_installer, tmp_path
 ):
     installer, home, calls, identity, port = persistent_installer
-    runtime = str(installer.Path(installer.__file__).resolve().parents[1])
+    runtime = str(installer.Path(installer.__file__).resolve().parent)
     identity.update(repository_path=str(repo.resolve()), source_runtime=runtime)
     installer.install(repo, port, "/slop/test", False)
     other = tmp_path / "other-repo"
@@ -425,9 +403,9 @@ def test_server_removal_preserves_another_repository(
         other_port = probe.getsockname()[1]
     identity["repository_path"] = str(other.resolve())
     installer.install(other, other_port, "/slop/other", False)
-    other_settings = other / ".slop-check/server-settings.json"
+    other_settings = other / ".strata/server-settings.json"
     original = other_settings.read_bytes()
-    history = repo / ".slop-check/history.jsonl"
+    history = repo / ".strata/history.jsonl"
     history.write_text("evidence\n")
     calls.clear()
     installer.remove(repo)
@@ -449,10 +427,10 @@ def test_server_removal_refuses_modified_ownership(
     installer, home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     settings_path = output / "server-settings.json"
     plist_path = next((home / "Library/LaunchAgents").glob("*.plist"))
     settings = json.loads(settings_path.read_text())
@@ -496,17 +474,17 @@ def test_server_reinstall_rejects_listener_surviving_owned_service_stop(
     installer, _home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
-    original_settings = (repo / ".slop-check/server-settings.json").read_bytes()
+    original_settings = (repo / ".strata/server-settings.json").read_bytes()
     with socket.socket() as foreign:
         foreign.bind(("127.0.0.1", port))
         foreign.listen()
         calls.clear()
         with pytest.raises(OSError):
             installer.install(repo, port, "/slop/test", False)
-    assert (repo / ".slop-check/server-settings.json").read_bytes() == original_settings
+    assert (repo / ".strata/server-settings.json").read_bytes() == original_settings
     assert len([c for c in calls if c[:2] == ["launchctl", "bootstrap"]]) == 1
 
 
@@ -518,7 +496,7 @@ def test_server_reinstall_waits_for_owned_listener_to_close(
     installer, _home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
     old = socket.socket()
@@ -553,10 +531,10 @@ def test_server_rollback_retries_bootstrap_while_launchd_finishes_bootout(
     installer, _home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     installer.install(repo, port, "/slop/test", False)
-    original = (repo / ".slop-check/server-settings.json").read_bytes()
+    original = (repo / ".strata/server-settings.json").read_bytes()
     calls.clear()
     bootstraps = 0
 
@@ -576,7 +554,7 @@ def test_server_rollback_retries_bootstrap_while_launchd_finishes_bootout(
     with pytest.raises(ValueError, match="identity"):
         installer.install(repo, port, "/slop/test", False)
     assert bootstraps == 3
-    assert (repo / ".slop-check/server-settings.json").read_bytes() == original
+    assert (repo / ".strata/server-settings.json").read_bytes() == original
 
 
 def test_server_install_accepts_port_from_closed_http_server(
@@ -585,7 +563,7 @@ def test_server_install_accepts_port_from_closed_http_server(
     installer, _home, _calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     with socket.socket() as previous:
         previous.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -604,7 +582,7 @@ def test_failed_tailnet_reinstall_preserves_owned_mount(
     installer, _home, calls, identity, port = persistent_installer
     identity.update(
         repository_path=str(repo.resolve()),
-        source_runtime=str(installer.Path(installer.__file__).resolve().parents[1]),
+        source_runtime=str(installer.Path(installer.__file__).resolve().parent),
     )
     config = {
         "Web": {
@@ -630,19 +608,19 @@ def test_failed_tailnet_reinstall_preserves_owned_mount(
         installer.install(repo, port, "/slop/test", True)
         == "https://host.example/slop/test/"
     )
-    original = (repo / ".slop-check/server-settings.json").read_bytes()
+    original = (repo / ".strata/server-settings.json").read_bytes()
     calls.clear()
     identity["source_runtime"] = "/foreign"
     with pytest.raises(ValueError, match="identity"):
         installer.install(repo, port, "/slop/test", True)
-    assert (repo / ".slop-check/server-settings.json").read_bytes() == original
+    assert (repo / ".strata/server-settings.json").read_bytes() == original
     assert not any(c[-1] == "off" for c in calls)
 
 
 def record_source(repo, path="src/main.rs", flagged=True):
     import test_dashboard
 
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     report = output / "reports/source"
     report.mkdir(parents=True, exist_ok=True)
     measured = test_dashboard.details()
@@ -761,8 +739,8 @@ def test_source_survives_history_changes_after_the_page_loaded(server):
     url, repo = server
     commit = record_source(repo)
     request = source_url(url)
-    test_hooks.load("record_commit").append_history(
-        repo / ".slop-check",
+    recorder.append_history(
+        repo / ".strata",
         {"commit": commit, "timestamp": "2026-10-03", "status": "skipped"},
     )
     with fetch(request) as response:
@@ -799,11 +777,13 @@ def test_live_dataset_identifies_shared_runtime(server):
     base, _ = server
     with urllib.request.urlopen(base + "/data.json") as response:
         data = json.load(response)
-    assert data["source_runtime"] == str(test_hooks.SCRIPTS.parent.resolve())
+    assert data["source_runtime"] == str(
+        Path(dashboard_server.__file__).resolve().parent
+    )
 
 
 def dashboard_context(repo):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     _, _, data = module.DatasetCache(repo).snapshot()
     return module, data
 
@@ -921,8 +901,8 @@ def test_tree_survives_history_changes_after_the_page_loaded(server):
     commit = record_source(repo)
     with fetch(url + "/data.json") as response:
         request = url + "/tree.json?" + context_query(json.load(response))
-    test_hooks.load("record_commit").append_history(
-        repo / ".slop-check",
+    recorder.append_history(
+        repo / ".strata",
         {"commit": commit, "timestamp": "2026-10-03", "status": "skipped"},
     )
     with fetch(request) as response:
@@ -1031,7 +1011,7 @@ def test_tree_rejects_invalid_filename_encoding(repo):
 
 
 def test_bounded_tree_timeout_reaps_process(repo, tmp_path, monkeypatch):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     script = tmp_path / "git"
     script.write_text("#!/bin/sh\nexec sleep 30\n")
     script.chmod(0o755)
@@ -1055,7 +1035,7 @@ def test_bounded_tree_timeout_reaps_process(repo, tmp_path, monkeypatch):
 
 
 def test_bounded_tree_overflow_reaps_process(repo, tmp_path, monkeypatch):
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     script = tmp_path / "git"
     script.write_text("#!/bin/sh\nexec yes output\n")
     script.chmod(0o755)
@@ -1110,7 +1090,7 @@ def test_measured_source_uses_extension_before_scope_language(repo):
 def test_tree_reports_timeout_after_stdout_closes(repo, tmp_path, monkeypatch):
     import os
 
-    module = importlib.import_module("serve_dashboard")
+    module = dashboard_server
     script = tmp_path / "git"
     script.write_text("#!/bin/sh\nexec 1>&-\nexec sleep 30\n")
     script.chmod(0o755)
