@@ -293,6 +293,19 @@ test('year-spanning date axes include the year',()=>{
  assert.equal(axis.tickformat,'%b %d<br>%Y');
 });
 
+test('single commit order axis has one tick at its position',()=>{
+ const axis=app.orderAxis([5]);
+ assert.deepEqual(axis.tickvals,[5]);
+ assert.deepEqual(axis.range,[4.5,5.5]);
+});
+test('commit order axes use whole-number steps across the recorded span',()=>{
+ assert.equal(app.orderAxis([1,2]).dtick,1);
+ assert.equal(app.orderAxis([1,2,3,4,5,6,7]).dtick,1);
+ assert.equal(app.orderAxis([1,30]).dtick,5);
+ assert.equal(app.orderAxis([100,400]).dtick,50);
+ for(const span of [1,6,29,299,2999]) assert.ok(span/app.orderAxis([1,1+span]).dtick<=8);
+});
+
 test('region metrics use weighted erosion and file-based verbosity',()=>{
  const measured={files:[{path:'src/a.rs',sloc:20,verbosity_flagged_loc:3},{path:'src/b.rs',sloc:100,verbosity_flagged_loc:7}],functions:[{path:'src/a.rs',cc:11,cognitive:20,sloc:4},{path:'src/b.rs',cc:1,cognitive:5,sloc:100}]};
  const metrics=app.metricIndex(measured,'').get('/');

@@ -157,6 +157,14 @@ function dateAxis(points) {
   return {...axis,tickformat:firstDate.slice(0,4)!==lastDate.slice(0,4)?'%b %d<br>%Y':'%b %d'};
 }
 
+function orderAxis(values) {
+  const first=Math.min(...values),last=Math.max(...values);
+  if(first===last) return {range:[first-.5,last+.5],tickvals:[first]};
+  let dtick=1;
+  for(const step of [2,5,10,20,50,100,200,500,1000,2000,5000,10000]) if((last-first)/dtick>8) dtick=step;
+  return {tickmode:'linear',tick0:0,dtick};
+}
+
 function sourceURL(href, selection) {
   const url=dataURL(href);
   url.pathname=url.pathname.replace(/data\.json$/, 'source.json');
@@ -341,7 +349,7 @@ function recordingSelection(data, identifier, language) {
   return {status:'missing',scope:-1,point:-1};
 }
 
-if (typeof module !== 'undefined') module.exports = {recordingSelection, repositoryFileTree, fileAncestors, fileMeasurements, treeURL, sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+if (typeof module !== 'undefined') module.exports = {recordingSelection, repositoryFileTree, fileAncestors, fileMeasurements, treeURL, sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, orderAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -405,8 +413,7 @@ if (typeof document !== 'undefined') {
   function layout(yTitle, extra={}) {
     return {...baseLayout, ...extra, xaxis:{...baseLayout.xaxis,
       type:'linear',title:{text:'Recorded commit order',font:{size:11},standoff:12},
-      ...($('axis').value==='date'?dateAxis(points):{}),
-      ...(points.length===1 && $('axis').value!=='date' ? {range:[xValues()[0]-.5,xValues()[0]+.5],tickvals:[xValues()[0]]} : {})},
+      ...($('axis').value==='date'?dateAxis(points):orderAxis(xValues()))},
       yaxis:{...baseLayout.yaxis,title:{text:yTitle,font:{size:11},standoff:12},
         ...(yTitle==='Source lines'?{rangemode:'tozero'}:{}),
         ...(yTitle==='Erosion (%)'?{range:[0,100]}:{}),...(extra.yaxis || {})}};
