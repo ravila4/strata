@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const app = require(path.join(__dirname, '../assets/dashboard.js'));
+const app = require(path.join(__dirname, '../src/strata/assets/dashboard.js'));
 const measuredSource=fields=>({measured:true,metric_available:{cc:true,erosion:true,cognitive:true,verbosity:Array.isArray(fields.flagged_lines)},...fields});
 
 test('repository file tree includes unmeasured and zero files with folders first',()=>{
@@ -367,7 +367,7 @@ test('source heat bounds overlapping span work',()=>{
 const vm=require('node:vm');
 const fs=require('node:fs');
 const highlighterContext={window:{}};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../assets/vendor/highlight.min.js'),'utf8'),highlighterContext);
+vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../src/strata/assets/vendor/highlight.min.js'),'utf8'),highlighterContext);
 const highlighter=highlighterContext.window.hljs;
 test('syntax highlighting covers a normal large source file and escapes source markup',()=>{
  for(const language of ['rust','python','javascript']) {

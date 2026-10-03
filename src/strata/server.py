@@ -1,10 +1,5 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["plotly==6.3.1"]
-# ///
 """Serve validated dashboard data on loopback for a Tailscale proxy."""
 
-import argparse
 import hashlib
 import json
 import math
@@ -19,8 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from dashboard import load_dataset, render_dashboard
-from record_commit import git
+from strata.dashboard import load_dataset, render_dashboard
+from strata.recorder import git
 
 
 class DatasetCache:
@@ -42,7 +37,7 @@ class DatasetCache:
                 for ref in commits or []
             )
         )
-        self.output = repo / ".slop-check"
+        self.output = repo / ".strata"
         self.lock = threading.Lock()
         self.key = None
         self.body = b""
@@ -82,7 +77,7 @@ class DatasetCache:
                 revision = hashlib.sha256(json.dumps(key).encode()).hexdigest()[:20]
                 data["revision"] = revision
                 data["source_available"] = True
-                data["source_runtime"] = str(Path(__file__).resolve().parents[1])
+                data["source_runtime"] = str(Path(__file__).resolve().parent)
                 body = json.dumps(data).encode()
                 self.body, self.etag, self.key = body, f'"{revision}"', key
                 self.data = data
@@ -400,24 +395,3 @@ def make_server(
                 self.send(404, b"Not found", "text/plain")
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=8766)
-    parser.add_argument(
-        "--commit",
-        action="append",
-        help="Show only these revisions in the supplied order; repeat for a comparison",
-    )
-    args = parser.parse_args()
-    with make_server(args.repo.resolve(), args.port, commits=args.commit) as server:
-        print(
-            f"Dashboard listening on http://127.0.0.1:{server.server_port}/", flush=True
-        )
-        server.serve_forever()
-
-
-if __name__ == "__main__":
-    main()

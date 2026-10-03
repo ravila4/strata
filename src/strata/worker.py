@@ -9,7 +9,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from record_commit import append_history, git, record_all, selection, spawn_worker
+from strata.recorder import append_history, git, record_all, selection, spawn_worker
 
 
 def read_queue(output: Path) -> dict:
@@ -76,7 +76,7 @@ def work(output: Path) -> None:
                     Path(job["repository"]),
                     output,
                     job["source_roots"],
-                    job["uvx"],
+                    job["python"],
                     commit=job["commit"],
                     languages=job["languages"],
                 )
@@ -112,7 +112,7 @@ def main() -> None:
             with (output / "worker.log").open("a") as log:
                 traceback.print_exc(file=log)
             print(
-                f"slop-check: could not enqueue; see {output / 'worker.log'}",
+                f"strata: could not enqueue; see {output / 'worker.log'}",
                 file=sys.stderr,
             )
 

@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["playwright", "plotly==6.3.1", "pytest"]
-# ///
 """Browser regression checks for the live source dialog; install Chromium and WebKit first."""
 
 from copy import deepcopy
@@ -9,9 +5,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import expect, sync_playwright
-from test_hooks import load
+from strata import dashboard
 
-render_dashboard = load("dashboard").render_dashboard
+render_dashboard = dashboard.render_dashboard
 text = '// <img src=x onerror="window.sourceInjection=true">\nfn example() {\n    let text = "multi\\nline";\n}\n'
 commit = "a" * 40
 functions = [

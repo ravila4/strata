@@ -1,14 +1,14 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import test_hooks
+from strata import dashboard, recorder
 
-git, load, repo = test_hooks.git, test_hooks.load, test_hooks.repo
-
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+git, repo = test_hooks.git, test_hooks.repo
 
 
 def details():
@@ -39,7 +39,7 @@ def aggregate():
 
 
 def test_details_match_aggregate():
-    load("record_commit").validate_details(details(), aggregate(), ["src/main.rs"])
+    recorder.validate_details(details(), aggregate(), ["src/main.rs"])
 
 
 @pytest.mark.parametrize(
@@ -65,9 +65,7 @@ def test_details_match_aggregate():
 )
 def test_inconsistent_details_are_rejected(mutation):
     with pytest.raises(ValueError):
-        load("record_commit").validate_details(
-            details() | mutation, aggregate(), ["src/main.rs"]
-        )
+        recorder.validate_details(details() | mutation, aggregate(), ["src/main.rs"])
 
 
 @pytest.mark.parametrize(
@@ -91,11 +89,9 @@ def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
     manifest.write_text(json.dumps([path]))
     detail_path = tmp_path / "details.json"
     command = [
-        "uvx",
-        "--from",
-        "scb-check==0.2.0",
-        "python",
-        str(SCRIPTS / "analyze_snapshot.py"),
+        sys.executable,
+        "-m",
+        "strata.analyze",
         "--snapshot",
         str(snapshot),
         "--manifest",
@@ -109,8 +105,7 @@ def test_analyzer_details_preserve_cli_aggregate(tmp_path, language, source):
     config.write_text("exclude = []\n")
     cli = subprocess.run(
         [
-            "uvx",
-            "scb-check==0.2.0",
+            str(Path(sys.executable).with_name("scb-check")),
             "check",
             str(snapshot),
             "--config",
@@ -169,7 +164,7 @@ def test_dataset_deduplicates_measurements_in_commit_order(repo):
         "second",
     )
     second = git(repo, "rev-parse", "HEAD")
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir()
     rows = [
         row(second, "reports/second", "2026-10-03"),
@@ -177,7 +172,7 @@ def test_dataset_deduplicates_measurements_in_commit_order(repo):
         row(first, "reports/new", "2026-10-02"),
     ]
     (output / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-    data = load("dashboard").load_dataset(repo, output)
+    data = dashboard.load_dataset(repo, output)
     assert [r["commit"] for r in data["series"][0]["snapshots"]] == [first, second]
     assert data["series"][0]["snapshots"][0]["report"] == "reports/new"
     assert data["series"][0]["snapshots"][0]["details"] is None
@@ -185,7 +180,7 @@ def test_dataset_deduplicates_measurements_in_commit_order(repo):
 
 def test_dataset_separates_measurement_policies(repo):
     commit = git(repo, "rev-parse", "HEAD")
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir()
     (output / "history.jsonl").write_text(
         "\n".join(
@@ -193,24 +188,22 @@ def test_dataset_separates_measurement_policies(repo):
         )
         + "\n"
     )
-    assert len(load("dashboard").load_dataset(repo, output)["series"]) == 2
+    assert len(dashboard.load_dataset(repo, output)["series"]) == 2
 
 
 def test_unsafe_detail_reference_is_not_read(repo):
-    output = repo / ".slop-check"
+    output = repo / ".strata"
     output.mkdir()
     record = row(git(repo, "rev-parse", "HEAD"), "../outside", "2026-10-02")
     record["details"] = "../outside/details.json"
     (output / "history.jsonl").write_text(json.dumps(record) + "\n")
-    data = load("dashboard").load_dataset(repo, output)
+    data = dashboard.load_dataset(repo, output)
     assert data["series"][0]["snapshots"][0]["details"] is None
     assert data["warnings"]
 
 
 def test_json_embedding_cannot_close_script():
-    encoded = load("dashboard").embed_json(
-        {"name": "</script><script>alert(1)</script>"}
-    )
+    encoded = dashboard.embed_json({"name": "</script><script>alert(1)</script>"})
     assert "<" not in encoded
     assert json.loads(encoded)["name"].startswith("</script>")
 
@@ -225,14 +218,14 @@ def test_invalid_file_verbosity_counts_are_rejected(field, value):
     measured["files"][0][field] = value
     report = aggregate() | {"verbosity_flagged_loc": 1, "clone_loc": 1}
     with pytest.raises(ValueError):
-        load("record_commit").validate_details(measured, report, ["src/main.rs"])
+        recorder.validate_details(measured, report, ["src/main.rs"])
 
 
 def test_file_verbosity_totals_match_aggregate():
     measured = details()
     measured["files"][0].update(verbosity_flagged_loc=1, clone_loc=1)
     with pytest.raises(ValueError):
-        load("record_commit").validate_details(
+        recorder.validate_details(
             measured,
             aggregate() | {"verbosity_flagged_loc": 2, "clone_loc": 1},
             ["src/main.rs"],
@@ -242,7 +235,7 @@ def test_file_verbosity_totals_match_aggregate():
 @pytest.mark.parametrize("marker", ["__APP__", "__DATA__", "__PLOTLY__"])
 def test_dashboard_preserves_template_markers_in_data(marker):
     data = {"repository": marker, "series": [], "subject": marker}
-    html = load("dashboard").render_dashboard(data)
+    html = dashboard.render_dashboard(data)
     embedded = html.split('<script id="data" type="application/json">', 1)[1].split(
         "</script>", 1
     )[0]
@@ -256,7 +249,7 @@ def test_invalid_flagged_line_locations_are_rejected(lines):
         verbosity_flagged_loc=1, clone_loc=0, verbosity_flagged_lines=lines
     )
     with pytest.raises(ValueError, match="flagged"):
-        load("record_commit").validate_details(
+        recorder.validate_details(
             measured,
             aggregate() | {"verbosity_flagged_loc": 1, "clone_loc": 0},
             ["src/main.rs"],
