@@ -164,6 +164,52 @@ function sourceURL(href, selection) {
   return url;
 }
 
+function treeURL(href, selection) {
+  const url=dataURL(href);
+  url.pathname=url.pathname.replace(/data\.json$/, 'tree.json');
+  for(const key of ['commit','scope']) url.searchParams.set(key,selection[key]);
+  return url;
+}
+
+function fileAncestors(path) {
+  const parts=path.split('/');
+  return parts.slice(0,-1).map((_,i)=>parts.slice(0,i+1).join('/'));
+}
+
+function repositoryFileTree(entries) {
+  const nodes=new Map(),roots=[];
+  for(const entry of entries) {
+    const parts=entry.path.split('/');
+    let children=roots;
+    for(let i=0;i<parts.length;i++) {
+      const path=parts.slice(0,i+1).join('/');
+      if(!nodes.has(path)) {
+        if(nodes.size===10000) throw new Error('File tree exceeds the 10000 node limit.');
+        const kind=i===parts.length-1?entry.kind:'directory';
+        const node={path,label:parts[i],kind,children:[]};
+        nodes.set(path,node);children.push(node);
+      }
+      children=nodes.get(path).children;
+    }
+  }
+  const compare=(a,b)=>(b.kind==='directory')-(a.kind==='directory') || a.label.localeCompare(b.label);
+  roots.sort(compare);
+  for(const node of nodes.values()) node.children.sort(compare);
+  return roots;
+}
+
+function fileMeasurements(details, metric) {
+  const values=new Map((details?.files || []).map(file=>[file.path,
+    metric==='verbosity'?(Number.isInteger(file.verbosity_flagged_loc)?file.verbosity_flagged_loc:null):0]));
+  if(metric!=='verbosity') for(const fn of details?.functions || []) {
+    if(!values.has(fn.path) || values.get(fn.path)===null) continue;
+    const fields=metric==='cc'?['cc']:metric==='erosion'?['cc','sloc']:['cognitive','sloc'];
+    const value=fields.every(key=>Number.isFinite(fn[key]))?functionHeatValue(fn,metric):null;
+    values.set(fn.path,value===null?null:values.get(fn.path)+value);
+  }
+  return values;
+}
+
 function sourceMarkup(text, language, highlighter) {
   if(text.length>128000 || text.split('\n').length>4000 || !highlighter?.getLanguage(language)) return null;
   const markup=highlighter.highlight(text,{language}).value;
@@ -172,6 +218,7 @@ function sourceMarkup(text, language, highlighter) {
 
 function sourceHeat(source, lineCount, metric) {
   const values=Array(lineCount).fill(0);
+  if(!source.measured || source.metric_available[metric]!==true) return {values,max:0,available:false};
   if(metric==='verbosity') {
     if(!Array.isArray(source.flagged_lines)) return {values,max:0,available:false};
     for(const line of source.flagged_lines) if(line>=1 && line<=lineCount) values[line-1]=1;
@@ -295,7 +342,7 @@ function recordingSelection(data, identifier, language) {
   return {status:'missing',scope:-1,point:-1};
 }
 
-if (typeof module !== 'undefined') module.exports = {recordingSelection, sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
+if (typeof module !== 'undefined') module.exports = {recordingSelection, repositoryFileTree, fileAncestors, fileMeasurements, treeURL, sortFunctionRows, fileTableRows, fileTableScales, sortFileRows, functionTableScales, tableHeatIntensity, repositoryHeatScales, sourceMinimap, sourceMapViewport, sourceMapScroll, sourceMapHeat, sourceURL, sourceHeat, sourceMarkup, percentile, absoluteSeries, childCategory, resolveFocus, validSegments, dataURL, refreshedIndex, chronological, complexityTree, dateAxis, metricIndex};
 
 if (typeof document !== 'undefined') {
   let data = JSON.parse(document.getElementById('data').textContent);
@@ -439,9 +486,107 @@ if (typeof document !== 'undefined') {
     $('share-empty').hidden=history.values.some(value=>value!==null);
   }
   let sourceResponse=null, sourceTarget=null, sourceController=null, sourceRequest=0;
+  let sourceContext=null,sourceLauncher=null;
+  let treeController=null,treeRequest=0,treeLoaded=false,treeLoading=false;
+  const treeFiles=new Map(),treeDirectories=new Map();
   const sourceDialog=$('source-dialog');
   const sourceScroll=sourceDialog.querySelector('.source-scroll'),minimap=$('source-minimap');
   let sourceMap=null,sourceMapHeatValues=null,sourceScales=null,mapDrag=null;
+  function setFilesOpen(open,restoreFocus=false) {
+    sourceDialog.classList.toggle('source-files-open',open);
+    $('source-files-toggle').setAttribute('aria-expanded',String(open));
+    const coverCode=open && matchMedia('(max-width:600px)').matches;
+    sourceScroll.inert=coverCode;minimap.inert=coverCode;
+    if(open) {
+      const current=treeFiles.get(sourceTarget?.path);
+      // Before the tree loads, the panel heading anchors focus inside the panel.
+      (current?.button || ($('source-tree-retry').hidden?$('source-files-title'):$('source-tree-retry'))).focus();
+    } else if(restoreFocus) $('source-files-toggle').focus();
+  }
+  matchMedia('(max-width:600px)').addEventListener('change',()=>setFilesOpen(false));
+  $('source-files-toggle').onclick=()=>setFilesOpen(!sourceDialog.classList.contains('source-files-open'),true);
+  sourceDialog.addEventListener('cancel',event=>{
+    if(sourceDialog.classList.contains('source-files-open') && matchMedia('(max-width:600px)').matches) {
+      event.preventDefault();setFilesOpen(false,true);
+    }
+  });
+  function selectTreeFile(reveal=false) {
+    for(const [path,row] of treeFiles) {
+      if(path===sourceTarget?.path) row.button.setAttribute('aria-current','true');
+      else row.button.removeAttribute('aria-current');
+    }
+    for(const path of fileAncestors(sourceTarget?.path || '')) {
+      const directory=treeDirectories.get(path);if(directory) directory.open=true;
+    }
+    if(reveal) treeFiles.get(sourceTarget?.path)?.button.scrollIntoView({block:'nearest'});
+  }
+  function decorateTree() {
+    if(!sourceContext) return;
+    const metric=$('source-metric').value,values=fileMeasurements(sourceContext.details,metric);
+    const max=[...values.values()].reduce((max,value)=>Math.max(max,value || 0),0);
+    $('source-files-caption').textContent=`Numbers show recorded metrics · ${explorerMetrics[metric].label}`;
+    for(const [path,row] of treeFiles) {
+      const value=values.get(path);
+      row.value.textContent=value==null?'':format(value);
+      const intensity=tableHeatIntensity(value,max);
+      row.button.style.backgroundColor=intensity?`rgba(180,85,36,${.08+.3*intensity})`:'';
+      row.description=!values.has(path)?'Not measured in this scope.':value===null?'Unavailable for this metric.':`${format(value)} ${explorerMetrics[metric].unit}`;
+      row.button.title=`${path} · ${row.description}`;
+    }
+    const focused=[...treeFiles.values()].find(row=>row.button===document.activeElement);
+    $('source-file-hint').textContent=focused?focused.button.title:'';
+  }
+  function renderTree(entries) {
+    const nodes=repositoryFileTree(entries),fragment=document.createDocumentFragment();
+    const pending=nodes.slice().reverse().map(node=>({node,parent:fragment}));
+    while(pending.length) {
+      const {node,parent}=pending.pop();
+      if(node.kind==='directory') {
+        const directory=document.createElement('details'),summary=document.createElement('summary'),children=document.createElement('div');
+        directory.dataset.path=node.path;summary.textContent=node.label;summary.title=node.path;
+        children.className='source-directory-children';directory.append(summary,children);parent.append(directory);
+        treeDirectories.set(node.path,directory);
+        for(const child of node.children.slice().reverse()) pending.push({node:child,parent:children});
+      } else {
+        const button=document.createElement('button'),name=document.createElement('span'),value=document.createElement('span');
+        button.className='source-file';button.dataset.path=node.path;button.setAttribute('aria-describedby','source-file-hint');
+        name.className='source-file-name';name.textContent=node.label;value.className='source-file-value';
+        button.append(name,value);parent.append(button);
+        const row={button,value,description:''};treeFiles.set(node.path,row);
+        const showHint=()=>$('source-file-hint').textContent=button.title;
+        button.addEventListener('focus',showHint);button.addEventListener('mouseenter',showHint);
+        button.addEventListener('blur',()=>$('source-file-hint').textContent='');
+        button.addEventListener('mouseleave',()=>{if(document.activeElement!==button) $('source-file-hint').textContent='';});
+        button.onclick=()=>{
+          if(matchMedia('(max-width:600px)').matches) {setFilesOpen(false);$('source-title').focus();}
+          loadSource({path:node.path});
+        };
+      }
+    }
+    $('source-tree').replaceChildren(fragment);
+    decorateTree();selectTreeFile(true);
+  }
+  async function loadTree() {
+    if(!sourceContext || treeLoaded || treeLoading) return;
+    treeLoading=true;treeController=new AbortController();
+    const controller=treeController,request=++treeRequest;
+    $('source-tree-status').textContent='Loading files…';$('source-tree-retry').hidden=true;
+    const timeout=setTimeout(()=>controller.abort(),10000);
+    try {
+      const response=await fetch(treeURL(location.href,sourceContext),{cache:'no-store',signal:controller.signal});
+      const body=await response.json();
+      if(request!==treeRequest || !sourceDialog.open) return;
+      if(!response.ok) throw new Error(body.error || 'File tree unavailable.');
+      renderTree(body.entries);treeLoaded=true;
+      $('source-tree-status').textContent=body.entries.length?'':'No tracked files at this commit.';
+    } catch(error) {
+      if(request===treeRequest && sourceDialog.open) {
+        $('source-tree-status').textContent=error.name==='AbortError'?'File tree request timed out.':error.message;
+        $('source-tree-retry').hidden=false;
+      }
+    } finally {clearTimeout(timeout);if(request===treeRequest) treeLoading=false;}
+  }
+  $('source-tree-retry').onclick=loadTree;
   function updateSourceViewport() {
     if(!sourceMap || !sourceScroll.clientHeight) return;
     const height=minimap.clientHeight;
@@ -522,19 +667,31 @@ if (typeof document !== 'undefined') {
       if(sourceTarget?.line<=i+1 && i+1<=sourceTarget.end_line) row.classList.add('source-selected');
       gutter.append(row);
     }
-    $('source-legend').textContent=!heat.available
-      ?(metric==='verbosity'?'Exact flagged-line locations were not recorded for this measurement.':'Heat map unavailable: function ranges exceed the preview limit.')
+    $('source-legend').textContent=!sourceResponse.measured?'Not measured in this scope.':!heat.available
+      ?(metric==='verbosity'?'Exact flagged-line locations were not recorded for this measurement.':!sourceResponse.metric_available[metric]?'This metric was not recorded for this file.':'Heat map unavailable: function ranges exceed the preview limit.')
       :metric==='verbosity'?'Shaded gutter = flagged source line.':heat.max===0?'No function hotspots for this metric.':'';
     drawSourceMinimap();
   }
-  async function openSource(target) {
+  async function openSource(target,launcher) {
+    const point=points[selected];
+    sourceContext={commit:point.commit,date:point.date,scope:series.id,details:point.details};
+    sourceLauncher={element:launcher,target};
+    sourceScales=repositoryHeatScales(point.details);
+    treeRequest++;treeController?.abort();treeLoaded=false;treeLoading=false;treeFiles.clear();treeDirectories.clear();
+    $('source-tree').replaceChildren();$('source-tree-status').textContent='';$('source-file-hint').textContent='';
+    $('source-tree-retry').hidden=true;
+    $('source-files-title').textContent=`Files at ${point.commit.slice(0,12)}`;
+    $('source-metric').value=$('explorer-metric').value;
+    if(!sourceDialog.open) sourceDialog.showModal();
+    await loadSource(target);
+  }
+  async function loadSource(target) {
+    if(!sourceContext) return;
     sourceController?.abort();
     const request=++sourceRequest;
     sourceController=new AbortController();
     const controller=sourceController;
-    const point=points[selected];
-    const selection={commit:point.commit,path:target.path,scope:series.id};
-    sourceScales=repositoryHeatScales(point.details);
+    const selection={...sourceContext,path:target.path};
     sourceTarget=target;sourceResponse=null;sourceMap=null;sourceMapHeatValues=null;mapDrag=null;minimap.hidden=true;
     $('source-title').replaceChildren();
     const segments=target.path.split('/');
@@ -543,12 +700,11 @@ if (typeof document !== 'undefined') {
       part.textContent=segment+(index<segments.length-1?'/':'');
       $('source-title').append(part);
     });
-    $('source-meta').textContent=`${point.commit.slice(0,12)} · ${point.date.slice(0,10)}`;
+    $('source-meta').textContent=`${sourceContext.commit.slice(0,12)} · ${sourceContext.date.slice(0,10)}`;
     $('source-status').textContent='Loading source…';
     $('source-code').textContent='';$('source-code').className='';
     $('source-gutter').replaceChildren();$('source-legend').textContent='';
-    $('source-metric').value=$('explorer-metric').value;
-    if(!sourceDialog.open) sourceDialog.showModal();
+    selectTreeFile();sourceScroll.scrollTop=0;sourceScroll.scrollLeft=0;
     const timeout=setTimeout(()=>controller.abort(),10000);
     try {
       const response=await fetch(sourceURL(location.href,selection),{cache:'no-store',signal:controller.signal});
@@ -560,7 +716,7 @@ if (typeof document !== 'undefined') {
       const code=$('source-code');code.textContent=body.text;
       const markup=sourceMarkup(body.text,body.language,window.hljs);
       if(markup!==null) code.innerHTML=markup;
-      $('source-status').textContent=markup!==null?'':'Plain text shown; syntax highlighting limit reached.';
+      $('source-status').textContent=markup!==null?'':window.hljs?.getLanguage(body.language)?'Plain text shown; syntax highlighting limit reached.':'';
       recolorSource();
       const row=$('source-gutter').children[Math.max(0,(target.line||1)-1)];
       if(row) row.scrollIntoView({block:'center'});
@@ -573,17 +729,21 @@ if (typeof document !== 'undefined') {
     sourceDialog.classList.toggle('source-expanded',expanded);
     $('source-expand').textContent=expanded?'Restore':'Expand';
     $('source-expand').setAttribute('aria-pressed',String(expanded));
+    setFilesOpen(false);
+    if(expanded) {if(treeLoaded) selectTreeFile(true);else loadTree();}
   }
   $('source-expand').onclick=()=>setSourceExpanded(!sourceDialog.classList.contains('source-expanded'));
   sourceDialog.addEventListener('close',()=>{
     setSourceExpanded(false);
     sourceRequest++;sourceController?.abort();sourceResponse=null;sourceMap=null;sourceMapHeatValues=null;mapDrag=null;minimap.hidden=true;
-    const button=[...document.querySelectorAll('.source-button')].find(node=>node.dataset.path===sourceTarget?.path && node.dataset.line===String(sourceTarget?.line||0));
+    treeRequest++;treeController?.abort();treeLoading=false;
+    const button=sourceLauncher?.element?.isConnected?sourceLauncher.element:[...document.querySelectorAll('.source-button')].find(node=>node.dataset.path===sourceLauncher?.target.path && node.dataset.line===String(sourceLauncher?.target.line||0));
+    sourceContext=null;sourceLauncher=null;
     (button || $('explorer-metric')).focus();
   });
   $('source-metric').onchange=()=>{
     $('explorer-metric').value=$('source-metric').value;
-    detailsChanged();recolorSource();
+    detailsChanged();recolorSource();decorateTree();
   };
   function table(id, rows) {
     const body=$(id); body.replaceChildren();
@@ -609,7 +769,7 @@ if (typeof document !== 'undefined') {
             const source=document.createElement('button');source.className='source-button';source.append($('source-icon').content.cloneNode(true));
             source.dataset.path=cell.source.path;source.dataset.line=String(cell.source.line||0);
             source.title='View source';source.setAttribute('aria-label','View source: '+cell.label);
-            source.onclick=()=>openSource(cell.source);td.append(source);
+            source.onclick=()=>openSource(cell.source,source);td.append(source);
           }
         } else { td.textContent=String(cell); td.title=String(cell); }
         if (i) td.classList.add('numeric'); tr.append(td);

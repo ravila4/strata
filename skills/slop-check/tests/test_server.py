@@ -8,7 +8,6 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-
 import test_hooks
 
 repo = test_hooks.repo
@@ -96,7 +95,7 @@ def test_comparison_rejects_invalid_commit_references(repo, revision):
 
 
 def test_server_serves_only_dashboard_and_metrics(server):
-    url, repo = server
+    url, _repo = server
     with fetch(url + "/") as response:
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers["Content-Type"].startswith("text/html")
@@ -690,7 +689,6 @@ def test_live_source_reads_recorded_commit_instead_of_worktree(server):
     [
         ({"commit": "HEAD"}, 400),
         ({"commit": "0" * 40}, 404),
-        ({"path": "src/tests.rs"}, 404),
         ({"path": "../.git/config"}, 404),
         ({"scope": "-1"}, 400),
         ({"scope": "0" * 16}, 404),
@@ -798,3 +796,321 @@ def test_live_dataset_identifies_shared_runtime(server):
     with urllib.request.urlopen(base + "/data.json") as response:
         data = json.load(response)
     assert data["source_runtime"] == str(test_hooks.SCRIPTS.parent.resolve())
+
+
+def dashboard_context(repo):
+    module = importlib.import_module("serve_dashboard")
+    body, _ = module.DatasetCache(repo).snapshot()
+    return module, json.loads(body)
+
+
+def context_query(data, **fields):
+    from urllib.parse import urlencode
+
+    return urlencode(
+        {"commit": data["head"], "scope": data["series"][0]["id"]} | fields
+    )
+
+
+def test_tree_lists_all_historical_entries(repo):
+    commit = record_source(repo)
+    (repo / "src/tests.rs").unlink()
+    (repo / "untracked.txt").write_text("working tree")
+    module, data = dashboard_context(repo)
+    assert module.read_tree(repo, data, context_query(data)) == {
+        "commit": commit,
+        "entries": [
+            {"path": "src/link.rs", "kind": "symlink"},
+            {"path": "src/main.rs", "kind": "file"},
+            {"path": "src/tests.rs", "kind": "file"},
+        ],
+    }
+
+
+def test_source_previews_unmeasured_tracked_text(server):
+    url, repo = server
+    record_source(repo)
+    with fetch(source_url(url, path="src/tests.rs")) as response:
+        source = json.load(response)
+    assert source["text"] == "not production\n"
+    assert source["measured"] is False
+    assert source["functions"] == []
+    assert source["metric_available"] == {
+        "cc": False,
+        "erosion": False,
+        "cognitive": False,
+        "verbosity": False,
+    }
+
+
+def test_source_measurement_availability_keeps_zero(repo):
+    record_source(repo, flagged=False)
+    module, data = dashboard_context(repo)
+    details = data["series"][0]["snapshots"][0]["details"]
+    details["functions"][0].update(cc=0, cognitive=0)
+    source = module.read_source(repo, data, context_query(data, path="src/main.rs"))
+    assert source["measured"] is True
+    assert source["metric_available"] == {
+        "cc": True,
+        "erosion": True,
+        "cognitive": True,
+        "verbosity": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "path,language",
+    [
+        ("doc.md", None),
+        ("code.py", "python"),
+        ("code.pyi", "python"),
+        ("code.mjs", "javascript"),
+        ("code.cjs", "javascript"),
+        ("code.js", "javascript"),
+    ],
+)
+def test_unmeasured_source_language_follows_extension(repo, path, language):
+    (repo / path).write_text("text\n")
+    test_hooks.git(repo, "add", path)
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "text")
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    assert (
+        module.read_source(repo, data, context_query(data, path=path))["language"]
+        == language
+    )
+
+
+def test_tree_authorizes_snapshot_without_details(repo):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    data["series"][0]["snapshots"][0]["details"] = None
+    assert len(module.read_tree(repo, data, context_query(data))["entries"]) == 3
+    assert (
+        module.read_source(repo, data, context_query(data, path="src/main.rs"))[
+            "measured"
+        ]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "fields,status",
+    [
+        ({"commit": "HEAD"}, 400),
+        ({"commit": "0" * 40}, 404),
+        ({"scope": "0" * 16}, 404),
+        ({"scope": "-1"}, 400),
+        ({"path": "src/main.rs"}, 400),
+    ],
+)
+def test_tree_rejects_invalid_context(repo, fields, status):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    with pytest.raises(module.SourceError) as error:
+        module.read_tree(repo, data, context_query(data, **fields))
+    assert error.value.status == status
+
+
+def test_tree_survives_history_changes_after_the_page_loaded(server):
+    url, repo = server
+    commit = record_source(repo)
+    with fetch(url + "/data.json") as response:
+        request = url + "/tree.json?" + context_query(json.load(response))
+    test_hooks.load("record_commit").append_history(
+        repo / ".slop-check",
+        {"commit": commit, "timestamp": "2026-10-03", "status": "skipped"},
+    )
+    with fetch(request) as response:
+        assert json.load(response)["commit"] == commit
+
+
+def test_tree_http_route(server):
+    url, repo = server
+    record_source(repo)
+    with fetch(url + "/data.json") as response:
+        data = json.load(response)
+    with fetch(url + "/tree.json?" + context_query(data)) as response:
+        assert len(json.load(response)["entries"]) == 3
+
+
+@pytest.mark.parametrize(
+    "limit", ["TREE_MAX_BYTES", "TREE_MAX_NODES", "TREE_MAX_JSON_BYTES"]
+)
+def test_tree_reports_resource_limit_instead_of_partial_listing(
+    repo, monkeypatch, limit
+):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    monkeypatch.setattr(module, limit, 1)
+    with pytest.raises(module.SourceError, match="limit") as error:
+        module.read_tree(repo, data, context_query(data))
+    assert error.value.status == 422
+
+
+def test_tree_reports_unavailable_git_objects(repo):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    (repo / ".git").rename(repo / "missing-git")
+    with pytest.raises(module.SourceError) as error:
+        module.read_tree(repo, data, context_query(data))
+    assert error.value.status == 422
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "__proto__",
+        "constructor",
+        "src/a[1].rs",
+        "src/a\nname.rs",
+        'src/a\tquote".rs',
+        "src/日本語.rs",
+    ],
+)
+def test_tree_preserves_literal_paths(repo, path):
+    (repo / path).write_text("literal\n")
+    test_hooks.git(repo, "add", "--", path)
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "literal")
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    assert {"path": path, "kind": "file"} in module.read_tree(
+        repo, data, context_query(data)
+    )["entries"]
+    assert (
+        module.read_source(repo, data, context_query(data, path=path))["text"]
+        == "literal\n"
+    )
+
+
+def test_tree_includes_submodule_placeholder(repo):
+    commit = test_hooks.git(repo, "rev-parse", "HEAD")
+    test_hooks.git(
+        repo, "update-index", "--add", "--cacheinfo", f"160000,{commit},vendor"
+    )
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "gitlink")
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    assert {"path": "vendor", "kind": "submodule"} in module.read_tree(
+        repo, data, context_query(data)
+    )["entries"]
+    with pytest.raises(module.SourceError, match="regular"):
+        module.read_source(repo, data, context_query(data, path="vendor"))
+
+
+def test_source_partial_metric_availability(repo):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    details = data["series"][0]["snapshots"][0]["details"]
+    del details["functions"][0]["cognitive"]
+    source = module.read_source(repo, data, context_query(data, path="src/main.rs"))
+    assert source["metric_available"] == {
+        "cc": True,
+        "erosion": True,
+        "cognitive": False,
+        "verbosity": True,
+    }
+
+
+def test_tree_rejects_invalid_filename_encoding(repo):
+    object_id = test_hooks.git(repo, "rev-parse", "HEAD:src/main.rs")
+    subprocess.run(
+        ["git", "-C", str(repo), "update-index", "-z", "--index-info"],
+        input=b"100644 " + object_id.encode() + b"\tbad-\xff\x00",
+        check=True,
+    )
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "encoding")
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    with pytest.raises(module.SourceError, match="non-UTF-8"):
+        module.read_tree(repo, data, context_query(data))
+
+
+def test_bounded_tree_timeout_reaps_process(repo, tmp_path, monkeypatch):
+    module = importlib.import_module("serve_dashboard")
+    script = tmp_path / "git"
+    script.write_text("#!/bin/sh\nexec sleep 30\n")
+    script.chmod(0o755)
+    import os
+
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    monkeypatch.setattr(module, "GIT_TIMEOUT_SECONDS", 0.02)
+    processes = []
+    original = module.subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    with pytest.raises(module.SourceError, match="time limit"):
+        module.bounded_tree_output(repo, "0" * 40)
+    assert processes[0].poll() is not None
+    assert processes[0].stdout.closed
+
+
+def test_bounded_tree_overflow_reaps_process(repo, tmp_path, monkeypatch):
+    module = importlib.import_module("serve_dashboard")
+    script = tmp_path / "git"
+    script.write_text("#!/bin/sh\nexec yes output\n")
+    script.chmod(0o755)
+    import os
+
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    monkeypatch.setattr(module, "TREE_MAX_BYTES", 10)
+    processes = []
+    original = module.subprocess.Popen
+
+    def spawn(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    with pytest.raises(module.SourceError, match="byte limit"):
+        module.bounded_tree_output(repo, "0" * 40)
+    assert processes[0].poll() is not None
+    assert processes[0].stdout.closed
+
+
+def test_tree_node_budget_counts_derived_directories(repo, monkeypatch):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    monkeypatch.setattr(module, "TREE_MAX_NODES", 3)
+    with pytest.raises(module.SourceError, match="node limit"):
+        module.read_tree(repo, data, context_query(data))
+
+
+@pytest.mark.parametrize("extra", ["&scope=0", "&path=", "&unknown=value"])
+def test_tree_rejects_duplicate_or_extra_query_fields(repo, extra):
+    record_source(repo)
+    module, data = dashboard_context(repo)
+    with pytest.raises(module.SourceError) as error:
+        module.read_tree(repo, data, context_query(data) + extra)
+    assert error.value.status == 400
+
+
+def test_measured_source_uses_extension_before_scope_language(repo):
+    (repo / "code.py").write_text("pass\n")
+    test_hooks.git(repo, "add", "code.py")
+    test_hooks.git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "python")
+    record_source(repo, "code.py")
+    module, data = dashboard_context(repo)
+    assert (
+        module.read_source(repo, data, context_query(data, path="code.py"))["language"]
+        == "python"
+    )
+
+
+def test_tree_reports_timeout_after_stdout_closes(repo, tmp_path, monkeypatch):
+    import os
+
+    module = importlib.import_module("serve_dashboard")
+    script = tmp_path / "git"
+    script.write_text("#!/bin/sh\nexec 1>&-\nexec sleep 30\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + os.environ["PATH"])
+    monkeypatch.setattr(module, "GIT_TIMEOUT_SECONDS", 0.2)
+    with pytest.raises(module.SourceError, match="time limit"):
+        module.bounded_tree_output(repo, "0" * 40)
