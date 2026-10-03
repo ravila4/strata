@@ -116,8 +116,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         args.run(args)
     except subprocess.CalledProcessError as error:
-        detail = (error.stderr or b"").decode(errors="replace").strip()
-        root.error(detail or f"git failed: {' '.join(map(str, error.cmd))}")
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        root.error(stderr.strip() or f"{' '.join(map(str, error.cmd))} failed")
     except (OSError, ValueError) as error:
         root.error(str(error))
     except KeyboardInterrupt:
