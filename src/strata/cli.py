@@ -14,8 +14,9 @@ def scan(args: argparse.Namespace) -> None:
 
 
 def backfill(args: argparse.Namespace) -> None:
+    revision = args.revision or recorder.default_branch(args.repo)
     recorder.backfill(
-        args.repo, args.revision, args.source_root, args.since, args.every
+        args.repo, revision, args.source_root, args.since, args.every
     )
 
 
@@ -81,7 +82,12 @@ def parser() -> argparse.ArgumentParser:
         description="Measure first-parent history, newest first, skipping commits "
         "already measured with the same selection.",
     )
-    command.add_argument("revision", nargs="?", default="main")
+    command.add_argument(
+        "revision",
+        nargs="?",
+        default=None,
+        help="revision to backfill (default: detected default branch)",
+    )
     command.add_argument(
         "--since", help="only commits after this date, e.g. 2026-01-01"
     )
