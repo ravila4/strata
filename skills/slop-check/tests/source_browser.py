@@ -170,18 +170,31 @@ def check_file_browser(page, width):
     launcher = page.locator('#files-body .source-button[data-path="src/example.rs"]')
     launcher.click()
     page.wait_for_selector("#source-code .hljs-keyword")
-    assert not page.locator("#source-files").is_visible()
-    page.locator("#source-expand").click()
-    page.wait_for_selector(
-        '#source-tree button[data-path="src/example.rs"]', state="attached"
-    )
     files = page.locator("#source-files")
     toggle = page.locator("#source-files-toggle")
     if width < 600:
         assert not files.is_visible()
+        page.locator("#source-expand").click()
+        assert not files.is_visible()
         toggle.click()
         assert page.locator("#source-minimap").evaluate("e=>e.inert")
         assert page.locator(".source-scroll").evaluate("e=>e.inert")
+    else:
+        # Wide screens show the sidebar without expanding and remember a collapse.
+        expect(files).to_be_visible()
+        toggle.click()
+        assert not files.is_visible()
+        assert toggle.get_attribute("aria-expanded") == "false"
+        page.locator("#source-close").click()
+        launcher.click()
+        page.wait_for_selector("#source-code .hljs-keyword")
+        assert not files.is_visible()
+        toggle.click()
+        expect(files).to_be_visible()
+        page.locator("#source-expand").click()
+    page.wait_for_selector(
+        '#source-tree button[data-path="src/example.rs"]', state="attached"
+    )
     assert files.is_visible()
     if width < 600:
         Path(".scratch").mkdir(exist_ok=True)
@@ -275,7 +288,7 @@ def check_file_browser(page, width):
         assert page.locator("#source-dialog").evaluate("e=>e.open")
         assert toggle.evaluate("e=>document.activeElement===e")
     page.locator("#source-expand").click()
-    assert not files.is_visible()
+    assert files.is_visible() == (width >= 600)
     assert page.locator("#source-title").inner_text() == "README.md"
     page.locator("#source-expand").click()
     if width < 600:
@@ -375,11 +388,18 @@ def check_request_races(browser, width):
         page.locator('#files-body .source-button[data-path="src/example.rs"]').click()
         page.wait_for_selector("#source-code .hljs-keyword")
 
+    def show_files(page):
+        """Request the tree; wide screens already did when the source opened."""
+        if width < 600:
+            page.locator("#source-files-toggle").click()
+
     def expand_loaded_tree(page):
         page.locator("#source-expand").click()
+        show_files(page)
         page.wait_for_selector(
             '#source-tree button[data-path="README.md"]', state="attached"
         )
+        show_files(page)
 
     def choose_file(page, path):
         if width < 600 and not page.locator("#source-files").is_visible():
@@ -427,7 +447,6 @@ def check_request_races(browser, width):
 
     page = new_page()
     try:
-        open_source(page)
         pending = []
 
         def hold_first_tree(route):
@@ -437,7 +456,8 @@ def check_request_races(browser, width):
                 route.fulfill(json=tree)
 
         page.route("**/tree.json?*", hold_first_tree)
-        page.locator("#source-expand").click()
+        open_source(page)
+        show_files(page)
         wait_for_held_request(page, pending)
         page.locator("#source-close").click()
         expect(page.locator("#source-dialog")).not_to_be_visible()
@@ -462,15 +482,15 @@ def check_request_races(browser, width):
     if width < 600:
         page = new_page()
         try:
-            open_source(page)
             pending = []
             page.route(
                 "**/tree.json?*",
                 lambda route, _request, pending=pending: pending.append(route),
             )
+            open_source(page)
             page.locator("#source-expand").click()
-            wait_for_held_request(page, pending)
             page.locator("#source-files-toggle").click()
+            wait_for_held_request(page, pending)
             expect(page.locator("#source-files-title")).to_be_focused()
             pending.pop().abort()
         finally:
@@ -479,15 +499,16 @@ def check_request_races(browser, width):
     for resource in ("tree", "source"):
         page = new_page()
         try:
-            open_source(page)
             pending = []
             if resource == "tree":
                 page.route(
                     "**/tree.json?*",
                     lambda route, _request, pending=pending: pending.append(route),
                 )
-                page.locator("#source-expand").click()
+                open_source(page)
+                show_files(page)
             else:
+                open_source(page)
                 expand_loaded_tree(page)
                 page.route(
                     "**/source.json?*",
@@ -521,21 +542,19 @@ def check_request_races(browser, width):
 
     page = new_page()
     try:
-        open_source(page)
         pending = []
         page.route(
             "**/tree.json?*",
             lambda route, _request, pending=pending: pending.append(route),
         )
-        page.locator("#source-expand").click()
+        open_source(page)
+        show_files(page)
         wait_for_held_request(page, pending)
         pending[0].fulfill(
             status=422, json={"error": "File listing exceeded the node limit"}
         )
         expect(page.locator("#source-tree-status")).to_contain_text("node limit")
         assert page.locator("#source-code").inner_text() == text
-        if width < 600:
-            page.locator("#source-files-toggle").click()
         page.locator("#source-tree-retry").click()
         wait_for_held_request(page, pending, 2)
         assert page.locator("#source-code").inner_text() == text
@@ -823,10 +842,10 @@ with sync_playwright() as p:
             assert minimap.bounding_box()["height"] == scroll.bounding_box()["height"]
             assert page.evaluate("document.documentElement.scrollWidth") == width
             if width < 600:
+                page.locator("#source-files-toggle").click()
                 page.wait_for_selector(
                     '#source-tree button[data-path="README.md"]', state="attached"
                 )
-                page.locator("#source-files-toggle").click()
                 assert scroll.evaluate(
                     "e => e.scrollHeight > e.clientHeight && e.inert"
                 )
@@ -877,9 +896,11 @@ with sync_playwright() as p:
                 page.wait_for_selector("#source-code .hljs-keyword")
                 assert page.locator("#source-code").inner_text() == text
                 page.locator("#source-expand").click()
+                page.locator("#source-files-toggle").click()
                 page.wait_for_selector(
                     '#source-tree button[data-path="README.md"]', state="attached"
                 )
+                page.locator("#source-files-toggle").click()
                 updated = deepcopy(data)
                 updated["head"] = "b" * 40
                 updated["revision"] = "new-r"

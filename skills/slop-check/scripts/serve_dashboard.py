@@ -47,8 +47,13 @@ class DatasetCache:
         self.key = None
         self.body = b""
         self.etag = ""
+        self.data: dict = {}
 
-    def snapshot(self) -> tuple[bytes, str]:
+    def snapshot(self) -> tuple[bytes, str, dict]:
+        """Return the serialized dataset, its ETag and the parsed dataset.
+
+        Callers must not mutate the parsed dataset; it is shared across requests.
+        """
         with self.lock:
             head = (
                 self.commits[-1]
@@ -80,7 +85,8 @@ class DatasetCache:
                 data["source_runtime"] = str(Path(__file__).resolve().parents[1])
                 body = json.dumps(data).encode()
                 self.body, self.etag, self.key = body, f'"{revision}"', key
-            return self.body, self.etag
+                self.data = data
+            return self.body, self.etag, self.data
 
 
 class SourceError(ValueError):
@@ -318,8 +324,8 @@ def make_server(
 ) -> ThreadingHTTPServer:
     """Serve dashboard data and recorded Git source without filesystem routes."""
     cache = DatasetCache(repo, commits=commits)
-    body, _ = cache.snapshot()
-    html = render_dashboard(json.loads(body)).encode()
+    _, _, data = cache.snapshot()
+    html = render_dashboard(data).encode()
 
     class Handler(BaseHTTPRequestHandler):
         def send(
@@ -340,7 +346,7 @@ def make_server(
                 self.send(200, html, "text/html; charset=utf-8")
             elif path == "/data.json":
                 try:
-                    body, etag = cache.snapshot()
+                    body, etag, _ = cache.snapshot()
                     unchanged = self.headers.get("If-None-Match") == etag
                     self.send(
                         304 if unchanged else 200,
@@ -363,9 +369,9 @@ def make_server(
                     )
             elif path in {"/source.json", "/tree.json"}:
                 try:
-                    body, _ = cache.snapshot()
+                    _, _, data = cache.snapshot()
                     read = read_tree if path == "/tree.json" else read_source
-                    source = read(repo, json.loads(body), urlsplit(self.path).query)
+                    source = read(repo, data, urlsplit(self.path).query)
                     self.send(
                         200,
                         json.dumps(source).encode(),

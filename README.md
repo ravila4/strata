@@ -9,8 +9,8 @@ and changes over time.
 
 Browse directories and files, follow changes across commits, and open the source
 behind a measurement with syntax highlighting and metric hotspots. Source windows
-show the selected commit's code, even when the working tree has changed. Expand a
-source window to navigate its tracked files with a tree and complexity shading.
+show the selected commit's code, even when the working tree has changed. A file
+sidebar navigates the commit's tracked files with complexity shading.
 
 [![Strata's directory explorer and commit timeline](docs/images/dashboard.png)](docs/images/dashboard.png)
 

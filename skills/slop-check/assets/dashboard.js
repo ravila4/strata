@@ -492,19 +492,30 @@ if (typeof document !== 'undefined') {
   const sourceDialog=$('source-dialog');
   const sourceScroll=sourceDialog.querySelector('.source-scroll'),minimap=$('source-minimap');
   let sourceMap=null,sourceMapHeatValues=null,sourceScales=null,mapDrag=null;
-  function setFilesOpen(open,restoreFocus=false) {
+  // Wide screens keep the file sidebar in the chosen state across source
+  // windows; narrow screens show it as an overlay only on request.
+  let filesPreferred=true;
+  const narrowSource=()=>matchMedia('(max-width:600px)').matches;
+  const defaultFilesOpen=()=>filesPreferred && !narrowSource();
+  function setFilesOpen(open,moveFocus=false) {
     sourceDialog.classList.toggle('source-files-open',open);
     $('source-files-toggle').setAttribute('aria-expanded',String(open));
-    const coverCode=open && matchMedia('(max-width:600px)').matches;
+    const coverCode=open && narrowSource();
     sourceScroll.inert=coverCode;minimap.inert=coverCode;
+    if(open && sourceDialog.open) {if(treeLoaded) selectTreeFile(true);else loadTree();}
+    if(!moveFocus) return;
     if(open) {
       const current=treeFiles.get(sourceTarget?.path);
       // Before the tree loads, the panel heading anchors focus inside the panel.
       (current?.button || ($('source-tree-retry').hidden?$('source-files-title'):$('source-tree-retry'))).focus();
-    } else if(restoreFocus) $('source-files-toggle').focus();
+    } else $('source-files-toggle').focus();
   }
-  matchMedia('(max-width:600px)').addEventListener('change',()=>setFilesOpen(false));
-  $('source-files-toggle').onclick=()=>setFilesOpen(!sourceDialog.classList.contains('source-files-open'),true);
+  matchMedia('(max-width:600px)').addEventListener('change',()=>setFilesOpen(defaultFilesOpen()));
+  $('source-files-toggle').onclick=()=>{
+    const open=!sourceDialog.classList.contains('source-files-open');
+    if(!narrowSource()) filesPreferred=open;
+    setFilesOpen(open,true);
+  };
   sourceDialog.addEventListener('cancel',event=>{
     if(sourceDialog.classList.contains('source-files-open') && matchMedia('(max-width:600px)').matches) {
       event.preventDefault();setFilesOpen(false,true);
@@ -558,7 +569,7 @@ if (typeof document !== 'undefined') {
         button.addEventListener('blur',()=>$('source-file-hint').textContent='');
         button.addEventListener('mouseleave',()=>{if(document.activeElement!==button) $('source-file-hint').textContent='';});
         button.onclick=()=>{
-          if(matchMedia('(max-width:600px)').matches) {setFilesOpen(false);$('source-title').focus();}
+          if(narrowSource()) {setFilesOpen(false);$('source-title').focus();}
           loadSource({path:node.path});
         };
       }
@@ -683,6 +694,7 @@ if (typeof document !== 'undefined') {
     $('source-files-title').textContent=`Files at ${point.commit.slice(0,12)}`;
     $('source-metric').value=$('explorer-metric').value;
     if(!sourceDialog.open) sourceDialog.showModal();
+    setFilesOpen(defaultFilesOpen());
     await loadSource(target);
   }
   async function loadSource(target) {
@@ -729,8 +741,7 @@ if (typeof document !== 'undefined') {
     sourceDialog.classList.toggle('source-expanded',expanded);
     $('source-expand').textContent=expanded?'Restore':'Expand';
     $('source-expand').setAttribute('aria-pressed',String(expanded));
-    setFilesOpen(false);
-    if(expanded) {if(treeLoaded) selectTreeFile(true);else loadTree();}
+    setFilesOpen(defaultFilesOpen());
   }
   $('source-expand').onclick=()=>setSourceExpanded(!sourceDialog.classList.contains('source-expanded'));
   sourceDialog.addEventListener('close',()=>{

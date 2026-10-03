@@ -82,8 +82,10 @@ def test_comparison_serves_feature_commits_without_changing_checkout(repo):
 def test_comparison_deduplicates_commit_aliases(repo):
     module = importlib.import_module("serve_dashboard")
     commit = test_hooks.git(repo, "rev-parse", "HEAD")
-    body, _ = module.DatasetCache(repo, commits=["HEAD", commit]).snapshot()
+    body, _, data = module.DatasetCache(repo, commits=["HEAD", commit]).snapshot()
     assert json.loads(body)["requested_commits"] == [commit]
+    # Source and tree requests reuse the parsed dataset instead of reparsing it.
+    assert data == json.loads(body)
 
 
 @pytest.mark.parametrize("revision", ["missing", "--all"])
@@ -334,6 +336,8 @@ def test_persistent_server_uses_shared_runtime_without_copies(
     plist = plistlib.loads(
         next((home / "Library/LaunchAgents").glob("*.plist")).read_bytes()
     )
+    # Background launch agents run throttled, which slows every request.
+    assert plist["ProcessType"] == "Standard"
     args = plist["ProgramArguments"]
     assert args[args.index("--script") + 1] == str(
         runtime / "scripts/serve_dashboard.py"
@@ -800,8 +804,8 @@ def test_live_dataset_identifies_shared_runtime(server):
 
 def dashboard_context(repo):
     module = importlib.import_module("serve_dashboard")
-    body, _ = module.DatasetCache(repo).snapshot()
-    return module, json.loads(body)
+    _, _, data = module.DatasetCache(repo).snapshot()
+    return module, data
 
 
 def context_query(data, **fields):

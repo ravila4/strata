@@ -170,7 +170,7 @@ def install(repo: Path, port: int, mount: str, tailscale: bool) -> str:
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 30,
-        "ProcessType": "Background",
+        "ProcessType": "Standard",
         "StandardOutPath": str(output / "server.stdout.log"),
         "StandardErrorPath": str(output / "server.stderr.log"),
         "EnvironmentVariables": {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},

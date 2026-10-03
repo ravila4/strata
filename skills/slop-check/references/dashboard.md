@@ -138,9 +138,10 @@ changed. The open window stays on that commit during live refresh. Use Metric
 to change its gutter colors; this also selects the dashboard plot metric.
 Python, Rust, and JavaScript syntax highlighting is bundled locally.
 
-Choose Expand to browse tracked files beside the code. Parent folders open to
-reveal the current file, which has a blue selection marker. Click another file to
-open it at the same commit. Restore hides the browser and keeps the open file.
+Tracked files appear in a sidebar beside the code. Parent folders open to reveal
+the current file, which has a blue selection marker. Click another file to open
+it at the same commit. Choose Files to collapse or show the sidebar; the choice
+carries over to the next source window. Expand fills the screen.
 On mobile, choose Files to open the tree; selecting a file returns to code.
 Escape closes the mobile file panel before closing the source window.
 
