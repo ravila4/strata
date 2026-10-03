@@ -1,9 +1,8 @@
-# Advisory commit metrics
+# Recording commits
 
-Use this mode when the user asks to record SlopCodeBench metrics automatically
-in a repository. It supports macOS and Linux with Git and the `strata` tool.
-For one-off measurements without hooks, use the
-[live dashboard workflow](dashboard.md#record-without-installing-a-hook).
+The post-commit hook records every commit in the background. It supports macOS
+and Linux. For one-off measurements, use `strata scan`; for past history, use
+`strata backfill`.
 Install from the primary checkout; linked worktrees share hook configuration,
 so installation from a linked worktree is rejected. Commits made in linked
 worktrees use the same hook and write to the primary checkout's history.
@@ -99,10 +98,9 @@ background path, run the installed hook from the repository root:
 .strata/hooks/post-commit
 ```
 
-Inspect the history after the worker finishes. Check the history row,
-parse counts, and stderr. Verify preserved hooks through the installed path,
-especially hooks that locate sibling resources. Do not create a commit in the
-user's repo solely to test installation; use a temporary Git repo for that.
+Inspect the history after the worker finishes: check the history row, parse
+counts, and stderr. Preserved hooks run through their installed paths, so hooks
+that locate sibling resources keep working.
 
 To disable automatic recording:
 
@@ -112,8 +110,7 @@ strata hook remove --repo /absolute/path/to/repo
 
 Removal restores the previous local hook configuration and retains measurements,
 logs, and configuration in `.strata/`. Keep that directory excluded while
-retaining local history. Delete the local history and its exclude entry only
-when the user requests their removal.
+retaining local history. Deleting `.strata/` removes the local history.
 
 Settings from earlier recorder formats require `strata hook install` again
 after active workers finish. Reinstallation preserves recorded history and

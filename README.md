@@ -62,9 +62,19 @@ Measurements are advisory; they describe source structure and complexity concent
 | `strata service install` / `remove` | Keep the dashboard running on macOS, optionally over Tailscale |
 
 Commands act on the current repository; pass `--repo` for another. See
-[commit recording](skills/slop-check/references/commit-hook.md) and
-[dashboard usage](skills/slop-check/references/dashboard.md) for details. After
+[commit recording](docs/recording.md) and
+[dashboard usage](docs/dashboard.md) for details. After
 `uv tool upgrade strata`, restart running servers.
+
+## Agent skill
+
+[`skills/strata`](skills/strata/SKILL.md) teaches coding agents to run Strata
+and turn its measurements into review suggestions. For Claude Code, link it
+into your skills directory:
+
+```sh
+ln -s "$PWD/skills/strata" ~/.claude/skills/strata
+```
 
 ## Development
 
