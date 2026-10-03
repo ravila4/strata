@@ -117,8 +117,10 @@ metrics visible and create gaps in hotspot/distribution plots. One measured
 commit is a baseline, not an observed trend. Directory renames can move bands
 without changing complexity.
 
-The server exposes the dashboard, `/data.json`, and
-`/source.json` for files admitted by the recorded measurement. It binds to loopback. While visible, the page
+The server exposes the dashboard, `/data.json`, `/tree.json`, and `/source.json`.
+Tree and source requests use a commit recorded in the selected measurement scope;
+source previews accept regular tracked text files anywhere in that commit.
+It binds to loopback. While visible, the page
 checks every five seconds using conditional requests, pauses while hidden, and
 checks immediately on return. Refresh retains the chosen scope, older snapshot,
 and directory/file selection when they remain available. A view at the latest
@@ -133,21 +135,41 @@ recorded function range. Close the window with Close or Escape.
 
 Source comes from the selected Git commit, including when the working tree has
 changed. The open window stays on that commit during live refresh. Use Metric
-hotspots to change its gutter colors; this also selects the dashboard plot metric.
+to change its gutter colors; this also selects the dashboard plot metric.
 Python, Rust, and JavaScript syntax highlighting is bundled locally.
+
+Choose Expand to browse tracked files beside the code. Parent folders open to
+reveal the current file, which has a blue selection marker. Click another file to
+open it at the same commit. Restore hides the browser and keeps the open file.
+On mobile, choose Files to open the tree; selecting a file returns to code.
+Escape closes the mobile file panel before closing the source window.
+
+File badges show the selected metric's recorded value, including zero. Warm
+shading compares file totals across the captured measurement scope. Blank badges
+have no shading; hover or focus the filename to see whether it was unmeasured or
+the metric is unavailable. The tree includes configuration, docs and dotfiles,
+with symlinks and submodules visible as entries. It excludes untracked working
+files and submodule contents. Unknown text languages display plain text.
 
 Complexity shades function ranges by CC. Cyclomatic and cognitive erosion shade
 functions above the corresponding complexity threshold of 10 using complexity
-multiplied by the square root of function SLOC. Intensity is relative within the
-file; overlapping ranges use the highest score. Verbosity marks the exact union
+multiplied by the square root of function SLOC. Gutter and minimap intensity use
+the maximum function score across the captured measurement scope; overlapping
+ranges use the highest score. Verbosity marks the exact union
 of flagged source lines. Measurements recorded without line locations display
 an unavailable notice for that metric; they do not infer locations from counts.
 
-Files over 256 KiB or 10,000 lines, binary content, and unavailable Git objects
+Files over 256 KiB or 10,000 lines, binary content, symlinks, submodules and unavailable Git objects
 cannot be previewed. Files over 128,000 characters or 4,000 lines display plain
 text with the metric gutter. Excessive highlighting markup also uses plain text.
-Source stays available while new recordings or backfills arrive; the window
-names the commit it shows. Measurements must include recorded line locations for metric highlighting.
+Source and file navigation stay available while new recordings or backfills
+arrive; the window names the commit it shows. Measurements must include recorded
+line locations for metric highlighting.
+
+Tree loading rejects listings above 4 MiB of raw Git output, 10,000 combined file
+and directory nodes, or 8 MiB of JSON, and Git listing has a five-second deadline.
+An unavailable tree shows an error instead of omitting entries; the current code
+preview remains usable. Retry a failed tree request from the browser panel.
 
 The server refreshes its dataset when history or queue state changes. History
 mode also follows changes to checkout HEAD; comparisons retain their selected

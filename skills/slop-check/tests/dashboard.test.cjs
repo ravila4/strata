@@ -2,6 +2,55 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const app = require(path.join(__dirname, '../assets/dashboard.js'));
+const measuredSource=fields=>({measured:true,metric_available:{cc:true,erosion:true,cognitive:true,verbosity:Array.isArray(fields.flagged_lines)},...fields});
+
+test('repository file tree includes unmeasured and zero files with folders first',()=>{
+ const tree=app.repositoryFileTree([
+  {path:'README.md',kind:'file'},{path:'src/zero.rs',kind:'file'},
+  {path:'.gitignore',kind:'file'},{path:'src/audio/play.rs',kind:'file'},
+  {path:'vendor',kind:'submodule'},{path:'link',kind:'symlink'}
+ ]);
+ assert.deepEqual(tree.map(n=>[n.path,n.kind]),[
+  ['src','directory'],['.gitignore','file'],['link','symlink'],['README.md','file'],['vendor','submodule']
+ ]);
+ assert.deepEqual(tree[0].children.map(n=>n.path),['src/audio','src/zero.rs']);
+ assert.equal(tree[0].children[0].children[0].path,'src/audio/play.rs');
+ assert.deepEqual(app.fileAncestors('src/audio/play.rs'),['src','src/audio']);
+ assert.deepEqual(app.fileAncestors('README.md'),[]);
+});
+test('repository file tree treats prototype names and source markup as literal paths',()=>{
+ const tree=app.repositoryFileTree([{path:'__proto__/constructor/<script>.py',kind:'file'}]);
+ assert.equal(tree[0].children[0].children[0].label,'<script>.py');
+ assert.deepEqual(app.repositoryFileTree([]),[]);
+});
+test('repository tree rejects overflow before constructing a partial browser',()=>{
+ assert.throws(()=>app.repositoryFileTree(Array.from({length:10001},(_,i)=>({path:`f${i}`,kind:'file'}))),/limit/);
+ assert.throws(()=>app.repositoryFileTree(Array.from({length:5001},(_,i)=>({path:`d${i}/f`,kind:'file'}))),/limit/);
+});
+test('file measurements preserve recorded zero and partial verbosity availability',()=>{
+ const details={files:[{path:'a.rs',verbosity_flagged_loc:0},{path:'b.rs'},{path:'c.rs',verbosity_flagged_loc:3}],
+  functions:[{path:'b.rs',cc:12,cognitive:15,sloc:4},{path:'b.rs',cc:3,cognitive:2,sloc:1}]};
+ assert.deepEqual([...app.fileMeasurements(details,'cc')],[['a.rs',0],['b.rs',15],['c.rs',0]]);
+ assert.deepEqual([...app.fileMeasurements(details,'erosion')],[['a.rs',0],['b.rs',24],['c.rs',0]]);
+ assert.deepEqual([...app.fileMeasurements(details,'cognitive')],[['a.rs',0],['b.rs',30],['c.rs',0]]);
+ assert.deepEqual([...app.fileMeasurements(details,'verbosity')],[['a.rs',0],['b.rs',null],['c.rs',3]]);
+ assert.equal(app.fileMeasurements(details,'cc').has('README.md'),false);
+ assert.deepEqual([...app.fileMeasurements(null,'cc')],[]);
+});
+test('tree URLs preserve deployment mount without carrying file path',()=>{
+ const url=app.treeURL('https://host/slop/strata?old=1',{commit:'abc',scope:'0123456789abcdef',path:'x.rs'});
+ assert.equal(url.pathname,'/slop/strata/tree.json');
+ assert.deepEqual(Object.fromEntries(url.searchParams),{commit:'abc',scope:'0123456789abcdef'});
+});
+test('unmeasured source does not report zero complexity',()=>{
+ const source={measured:false,metric_available:{cc:false},functions:[]};
+ assert.deepEqual(app.sourceHeat(source,2,'cc'),{values:[0,0],max:0,available:false});
+});
+test('measured source honors per-metric availability',()=>{
+ const source={measured:true,metric_available:{cc:true,cognitive:false},functions:[]};
+ assert.equal(app.sourceHeat(source,2,'cc').available,true);
+ assert.equal(app.sourceHeat(source,2,'cognitive').available,false);
+});
 
 test('function sorting uses raw numeric values and keeps unavailable values last',()=>{
   const rows=[{path:'a.rs',name:'a',line:1,cc:100,cognitive:20,sloc:10},
@@ -80,8 +129,8 @@ test('repository erosion scales apply the same threshold as line shading',()=>{
   assert.equal(app.repositoryHeatScales({functions:[{cc:10,cognitive:10,sloc:100}]}).erosion,0);
   const fn={cc:11,cognitive:11,sloc:4,line:1,end_line:1};
   const scale=app.repositoryHeatScales({functions:[fn]});
-  assert.equal(scale.erosion,app.sourceHeat({functions:[fn]},1,'erosion').max);
-  assert.equal(scale.cognitive,app.sourceHeat({functions:[fn]},1,'cognitive').max);
+  assert.equal(scale.erosion,app.sourceHeat(measuredSource({functions:[fn]}),1,'erosion').max);
+  assert.equal(scale.cognitive,app.sourceHeat(measuredSource({functions:[fn]}),1,'cognitive').max);
 });
 
 test('minimap preserves indentation, token gaps, and blank lines',()=>{
@@ -295,24 +344,24 @@ test('source URLs retain deployment mount and name a stable scope',()=>{
  assert.deepEqual(Object.fromEntries(url.searchParams),{commit:'abc',path:'src/a b.rs',scope:'0123456789abcdef'});
 });
 test('source heat shades function ranges with maximum overlapping complexity',()=>{
- const source={functions:[{line:2,end_line:4,cc:12,cognitive:15,sloc:4},{line:3,end_line:3,cc:3,cognitive:1,sloc:1}]};
+ const source=measuredSource({functions:[{line:2,end_line:4,cc:12,cognitive:15,sloc:4},{line:3,end_line:3,cc:3,cognitive:1,sloc:1}]});
  assert.deepEqual(app.sourceHeat(source,5,'cc'),{values:[0,12,12,12,0],max:12,available:true});
  assert.deepEqual(app.sourceHeat(source,5,'erosion').values,[0,24,24,24,0]);
  assert.deepEqual(app.sourceHeat(source,5,'cognitive').values,[0,30,30,30,0]);
 });
 test('source heat uses exact flagged lines and distinguishes missing from zero',()=>{
- assert.equal(app.sourceHeat({functions:[]},3,'verbosity').available,false);
- assert.deepEqual(app.sourceHeat({functions:[],flagged_lines:[]},3,'verbosity'),{values:[0,0,0],max:0,available:true});
- assert.deepEqual(app.sourceHeat({functions:[],flagged_lines:[1,3]},3,'verbosity').values,[1,0,1]);
+ assert.equal(app.sourceHeat(measuredSource({functions:[]}),3,'verbosity').available,false);
+ assert.deepEqual(app.sourceHeat(measuredSource({functions:[],flagged_lines:[]}),3,'verbosity'),{values:[0,0,0],max:0,available:true});
+ assert.deepEqual(app.sourceHeat(measuredSource({functions:[],flagged_lines:[1,3]}),3,'verbosity').values,[1,0,1]);
 });
 test('source heat honors threshold and clips spans to source bounds',()=>{
- const source={functions:[{line:1,end_line:9,cc:10,cognitive:10,sloc:4}]};
+ const source=measuredSource({functions:[{line:1,end_line:9,cc:10,cognitive:10,sloc:4}]});
  assert.deepEqual(app.sourceHeat(source,2,'erosion').values,[0,0]);
  assert.deepEqual(app.sourceHeat(source,2,'cc').values,[10,10]);
 });
 test('source heat bounds overlapping span work',()=>{
  const functions=Array.from({length:101},()=>({line:1,end_line:10000,cc:12,sloc:2}));
- assert.equal(app.sourceHeat({functions},10000,'cc').available,false);
+ assert.equal(app.sourceHeat(measuredSource({functions}),10000,'cc').available,false);
 });
 
 const vm=require('node:vm');

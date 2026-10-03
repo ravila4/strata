@@ -7,9 +7,13 @@
 import argparse
 import hashlib
 import json
+import math
+import os
 import re
+import selectors
 import subprocess
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -87,23 +91,29 @@ class SourceError(ValueError):
         self.status = status
 
 
-def read_source(repo: Path, data: dict, query: str) -> dict:
-    """Read a bounded regular Git blob recorded in the current dataset.
+TREE_MAX_BYTES = 4 * 1024 * 1024
+TREE_MAX_NODES = 10000
+TREE_MAX_JSON_BYTES = 8 * 1024 * 1024
+GIT_TIMEOUT_SECONDS = 5
+
+
+def request_context(data: dict, query: str, *, source: bool) -> tuple[dict, dict, dict]:
+    """Authorize a recorded snapshot in the current dataset.
 
     Recorded commits are immutable, so a request made before the dataset
-    refreshed stays valid while its scope still records that file.
+    refreshed stays valid while its scope still records that commit.
     """
     fields = parse_qs(query, keep_blank_values=True)
-    if set(fields) != {"commit", "path", "scope"} or any(
+    required = {"commit", "scope"} | ({"path"} if source else set())
+    if set(fields) != required or any(
         len(values) != 1 or not values[0] for values in fields.values()
     ):
-        raise SourceError(400, "Provide commit, path and scope exactly once")
+        raise SourceError(400, "Provide each required query field exactly once")
     params = {key: values[0] for key, values in fields.items()}
-    commit, path = params["commit"], params["path"]
     if (
-        not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit)
+        not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", params["commit"])
         or not re.fullmatch(r"[0-9a-f]{16}", params["scope"])
-        or "\x00" in path
+        or "\x00" in params.get("path", "")
     ):
         raise SourceError(400, "Invalid commit, scope or path")
     scope = next(
@@ -112,16 +122,108 @@ def read_source(repo: Path, data: dict, query: str) -> dict:
     if scope is None:
         raise SourceError(404, "Measurement scope not found")
     snapshot = next(
-        (point for point in scope["snapshots"] if point["commit"] == commit), None
+        (point for point in scope["snapshots"] if point["commit"] == params["commit"]),
+        None,
     )
-    details = snapshot.get("details") if snapshot else None
-    file = (
-        next((entry for entry in details["files"] if entry["path"] == path), None)
-        if details
-        else None
+    if snapshot is None:
+        raise SourceError(404, "Commit was not recorded in this measurement scope")
+    return params, scope, snapshot
+
+
+def bounded_tree_output(repo: Path, commit: str) -> bytes:
+    """Collect Git output with limits enforced while the subprocess is running."""
+    try:
+        with subprocess.Popen(
+            ["git", "-C", str(repo), "ls-tree", "-rz", "--full-tree", commit],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ) as process:
+            try:
+                output = bytearray()
+                deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0 or not selector.select(remaining):
+                            raise SourceError(
+                                422, "File listing exceeded the time limit"
+                            )
+                        chunk = os.read(
+                            process.stdout.fileno(), min(65536, TREE_MAX_BYTES + 1)
+                        )
+                        if not chunk:
+                            break
+                        output.extend(chunk)
+                        if len(output) > TREE_MAX_BYTES:
+                            raise SourceError(
+                                422, "File listing exceeded the byte limit"
+                            )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SourceError(422, "File listing exceeded the time limit")
+                if process.wait(timeout=remaining):
+                    raise SourceError(422, "File listing is unavailable in Git")
+                return bytes(output)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+    except subprocess.TimeoutExpired as error:
+        raise SourceError(422, "File listing exceeded the time limit") from error
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SourceError(422, "File listing is unavailable in Git") from error
+
+
+def read_tree(repo: Path, data: dict, query: str) -> dict:
+    """List every tracked entry at an authorized commit without silently truncating."""
+    params, _, _ = request_context(data, query, source=False)
+    entries = []
+    directories = set()
+    try:
+        for entry in bounded_tree_output(repo, params["commit"]).split(b"\x00"):
+            if not entry:
+                continue
+            metadata, raw_path = entry.split(b"\t", 1)
+            mode, kind, _ = metadata.split()
+            path = raw_path.decode("utf-8")
+            entry_kind = (
+                "submodule"
+                if mode == b"160000"
+                else "symlink"
+                if mode == b"120000"
+                else "file"
+            )
+            if mode not in (b"100644", b"100755", b"120000", b"160000") or kind not in (
+                b"blob",
+                b"commit",
+            ):
+                raise SourceError(422, "Unsupported tracked entry in Git")
+            entries.append({"path": path, "kind": entry_kind})
+            parts = path.split("/")
+            directories.update(
+                "/".join(parts[:index]) for index in range(1, len(parts))
+            )
+            if len(entries) + len(directories) > TREE_MAX_NODES:
+                raise SourceError(422, "File listing exceeded the node limit")
+    except UnicodeDecodeError as error:
+        raise SourceError(422, "File listing contains a non-UTF-8 path") from error
+    result = {"commit": params["commit"], "entries": entries}
+    if len(json.dumps(result).encode()) > TREE_MAX_JSON_BYTES:
+        raise SourceError(422, "File listing exceeded the JSON response limit")
+    return result
+
+
+def read_source(repo: Path, data: dict, query: str) -> dict:
+    """Read a bounded regular Git blob at a recorded commit."""
+    params, scope, snapshot = request_context(data, query, source=True)
+    commit, path = params["commit"], params["path"]
+    if path.startswith("/") or any(part in {".", "..", ""} for part in path.split("/")):
+        raise SourceError(404, "File is not tracked at this commit")
+    details = snapshot.get("details") or {}
+    file = next(
+        (entry for entry in details.get("files", []) if entry["path"] == path), None
     )
-    if file is None:
-        raise SourceError(404, "File was not recorded in this measurement")
 
     def run(*args: str) -> bytes:
         try:
@@ -137,7 +239,7 @@ def read_source(repo: Path, data: dict, query: str) -> dict:
     tree = run("ls-tree", "-z", commit, "--", path).split(b"\x00")
     entries = [entry for entry in tree if entry]
     if len(entries) != 1:
-        raise SourceError(422, "Recorded source is unavailable in Git")
+        raise SourceError(404, "File is not tracked at this commit")
     metadata, tree_path = entries[0].split(b"\t", 1)
     mode, kind, object_id = metadata.split()
     if (
@@ -158,17 +260,56 @@ def read_source(repo: Path, data: dict, query: str) -> dict:
         raise SourceError(
             422, "Source is binary or exceeds the 10000 line preview limit"
         )
+    functions = (
+        [
+            function
+            for function in details.get("functions", [])
+            if function["path"] == path
+        ]
+        if file is not None
+        else []
+    )
+
+    def available(*fields: str) -> bool:
+        return file is not None and all(
+            all(
+                isinstance(fn.get(field), (int, float))
+                and not isinstance(fn.get(field), bool)
+                and math.isfinite(fn[field])
+                for field in fields
+            )
+            for fn in functions
+        )
+
+    suffix = Path(path).suffix.lower()
+    language = {
+        ".py": "python",
+        ".pyi": "python",
+        ".rs": "rust",
+        ".js": "javascript",
+        ".mjs": "javascript",
+        ".cjs": "javascript",
+    }.get(suffix)
+    if language is None and file is not None:
+        language = scope["language"]
     result = {
         "commit": commit,
         "path": path,
-        "language": scope["language"],
+        "language": language,
         "text": text,
-        "functions": [
-            function for function in details["functions"] if function["path"] == path
-        ],
+        "functions": functions,
+        "measured": file is not None,
+        "metric_available": {
+            "cc": available("cc"),
+            "erosion": available("cc", "sloc"),
+            "cognitive": available("cognitive", "sloc"),
+            "verbosity": file is not None
+            and isinstance(file.get("verbosity_flagged_lines"), list),
+        },
     }
-    if "verbosity_flagged_lines" in file:
+    if result["metric_available"]["verbosity"]:
         result["flagged_lines"] = file["verbosity_flagged_lines"]
+
     return result
 
 
@@ -220,12 +361,11 @@ def make_server(
                         b'{"error":"Dashboard data could not be refreshed"}',
                         "application/json",
                     )
-            elif path == "/source.json":
+            elif path in {"/source.json", "/tree.json"}:
                 try:
                     body, _ = cache.snapshot()
-                    source = read_source(
-                        repo, json.loads(body), urlsplit(self.path).query
-                    )
+                    read = read_tree if path == "/tree.json" else read_source
+                    source = read(repo, json.loads(body), urlsplit(self.path).query)
                     self.send(
                         200,
                         json.dumps(source).encode(),
