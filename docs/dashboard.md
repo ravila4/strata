@@ -33,21 +33,9 @@ the checkout. References resolve once at startup; aliases for the same commit
 are combined. New recordings refresh the measurements, while the selected
 hashes stay fixed. Restart with new hashes to review an updated PR.
 
-Run the server in a background session that remains alive after the reply, retain
-its session or process identifier, save logs as `.strata/server.stdout.log`
-and `.strata/server.stderr.log`, and return `http://127.0.0.1:8766/`.
-Verify that `/` responds and `/data.json` has `repository_path` matching the
-canonical repository path, `source_runtime` matching the installed `strata`
-package directory, and the intended measurements. For a comparison,
-`requested_commits` must match the ordered resolved hashes and `head` must match
-the last selected hash. For history serving, `requested_commits` must be empty
-and `head` must match checkout HEAD.
-Reuse a server only after those checks. If the port belongs to another process,
-choose a free port and report its URL. A server that failed to start is not a
-deliverable. Local serving does not require a login service or Tailscale.
-
-Plotly and syntax highlighting are bundled locally; no CDN is required.
-The first launch installs the pinned Plotly dependency through uv.
+`/data.json` identifies the server: `repository_path`, `source_runtime` (the
+installed package directory), `requested_commits` (empty in history mode), and
+`head`. Plotly and syntax highlighting are bundled locally; no CDN is required.
 
 ## Explore the measurements
 
@@ -179,7 +167,7 @@ it to reload them. Shut down the foreground server with Ctrl-C.
 
 ## Persistent macOS service and Tailscale
 
-For an explicitly requested persistent service:
+For a persistent service:
 
 ```sh
 strata service install --repo /absolute/path/to/repo \
