@@ -52,7 +52,7 @@ Scores flag code worth reading, not quality or correctness.
 | Command | Does |
 |---|---|
 | `strata scan [REV]` | Measure one commit (default `HEAD`) |
-| `strata backfill [REV]` | Measure past first-parent commits (default `main`), skipping measured ones; `--since`, `--every N` |
+| `strata backfill [REV]` | Measure past first-parent commits (default `HEAD`), skipping measured ones; `--since`, `--every N` |
 | `strata hook install` / `remove` | Record every commit in the background |
 | `strata serve` | Serve the dashboard on loopback |
 | `strata service install` / `remove` | Keep the dashboard running on macOS, optionally over Tailscale |
