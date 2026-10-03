@@ -221,6 +221,43 @@ def test_empty_scope_is_not_a_zero_score(repo):
     row = json.loads((output / "history.jsonl").read_text())
     assert row["status"] == "not_applicable"
     assert "metrics" not in row
+    assert not (output / row["report"] / "snapshot").exists()
+
+
+def fake_analyzer(tmp_path, exit_code=0):
+    analyzer = tmp_path / "uvx"
+    analyzer.write_text(f"""#!{sys.executable}
+import json, pathlib, sys
+if '-c' in sys.argv:
+    print('{{"scb-check":"0.2.0"}}')
+else:
+    detail = pathlib.Path(sys.argv[sys.argv.index('--details') + 1])
+    detail.write_text(json.dumps({{"files":[{{"path":"src/main.rs","sloc":3}}],"functions":[{{"path":"src/main.rs","name":"main","line":1,"end_line":3,"sloc":3,"cc":1,"cognitive":0}}]}}))
+    print({json.dumps(json.dumps(report()))})
+    sys.exit({exit_code})
+""")
+    analyzer.chmod(0o755)
+    return str(analyzer)
+
+
+def test_complete_scan_discards_source_copy(repo, tmp_path):
+    output = repo / "output"
+    load("record_commit").record(repo, output, ["src"], "rust", fake_analyzer(tmp_path))
+    row = json.loads((output / "history.jsonl").read_text())
+    assert row["status"] == "complete"
+    assert not (output / row["report"] / "snapshot").exists()
+    assert (output / row["report"] / "manifest.json").exists()
+
+
+def test_failed_scan_keeps_source_copy_for_diagnosis(repo, tmp_path):
+    output = repo / "output"
+    load("record_commit").record(
+        repo, output, ["src"], "rust", fake_analyzer(tmp_path, exit_code=2)
+    )
+    row = json.loads((output / "history.jsonl").read_text())
+    assert row["status"] == "failed"
+    snapshot = output / row["report"] / "snapshot"
+    assert (snapshot / "src/main.rs").read_text() == "fn main() {}\n"
 
 
 def test_linked_worktree_commit_records_its_own_head(repo, tmp_path):
