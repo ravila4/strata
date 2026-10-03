@@ -4,23 +4,19 @@ Strata records code metrics from Git commits and displays them in a live dashboa
 It uses [scb-check](https://github.com/gabeorlanski/scb-check) to measure Python,
 Rust, and JavaScript source.
 
-Named for geological layers, Strata helps you explore how your codebase builds up
-and changes over time.
-
-Browse directories and files, follow changes across commits, and open the source
-behind a measurement with syntax highlighting and metric hotspots. Source windows
-show the selected commit's code, even when the working tree has changed. A file
-sidebar navigates the commit's tracked files with complexity shading.
+Named for geological layers, Strata shows how a codebase builds up and changes
+over time. Browse directories and files, follow changes across commits, and open
+any measurement's source at that commit, with syntax highlighting and metric
+hotspots.
 
 [![Strata's directory explorer and commit timeline](docs/images/dashboard.png)](docs/images/dashboard.png)
 
-Strata's Python recorder and server measured across two commits.
+Strata measuring its own recorder and server across two commits.
 
 [![Commit source with syntax highlighting, complexity hotspots, and a minimap](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
 
 The source window shades function ranges by the selected metric. The minimap
-shows hotspots across the file and lets you jump to them. Exact flagged-line
-locations are available for measurements recorded with line details.
+shows hotspots across the file and lets you jump to them.
 
 ## Setup
 
@@ -39,9 +35,7 @@ strata scan
 ```
 
 Every recording scans Python, JavaScript, and Rust under the source roots, with
-separate metrics per language. The hook records future commits in the
-background. Each project's `.strata/` directory, excluded from Git, holds its
-configuration, measurements, reports, queue state, and logs.
+separate metrics per language. State lives in `.strata/`, excluded from Git.
 
 Start the live dashboard:
 
@@ -49,9 +43,8 @@ Start the live dashboard:
 strata serve
 ```
 
-Open <http://127.0.0.1:8766/>. New measurements refresh automatically while the
-dashboard is visible. Use `--port` to serve several projects at once.
-Measurements are advisory; they describe source structure and complexity concentration.
+Open <http://127.0.0.1:8766/>. Use `--port` to serve several projects at once.
+Scores flag code worth reading, not quality or correctness.
 
 | Command | Does |
 |---|---|
@@ -63,8 +56,9 @@ Measurements are advisory; they describe source structure and complexity concent
 
 Commands act on the current repository; pass `--repo` for another. See
 [commit recording](docs/recording.md) and
-[dashboard usage](docs/dashboard.md) for details. After
-`uv tool upgrade strata`, restart running servers.
+[dashboard usage](docs/dashboard.md) for details.
+
+After `uv tool upgrade strata`, restart running servers.
 
 ## Agent skill
 
@@ -96,7 +90,7 @@ uv run --with playwright python tests/multilanguage_browser.py
 
 [scb-check](https://github.com/gabeorlanski/scb-check), by
 [Gabriel Orlanski](https://github.com/gabeorlanski), provides Strata's metric analysis.
-Strata currently pins version 0.2.0 and adds commit recording and visualization
+Strata pins version 0.2.0 and adds commit recording and visualization
 around its results.
 
 [SlopCodeBench](https://github.com/SprocketLab/slop-code-bench), from SprocketLab,

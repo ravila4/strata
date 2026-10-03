@@ -1,220 +1,96 @@
-# Code evolution dashboard
+# Dashboard
 
-Use the live dashboard for metric checks, comparisons, and recorded history. It
-reads `.strata/history.jsonl`; record the selected commits before serving.
-Commands act on the current repository; pass `--repo` for another. Each
-repository keeps its own measurements and service configuration in
-`.strata/`; the installed `strata` tool is shared.
-
-## Record without installing a hook
+The dashboard reads `.strata/history.jsonl`, so record commits before serving.
 
 ```sh
-strata scan --repo /absolute/path/to/repo --source-root src HEAD
+strata scan --source-root src          # or strata backfill
+strata serve
 ```
 
-Choose explicit relative source roots. Python, JavaScript, and Rust are
-automatically measured separately under those roots. Repeat `--source-root` for multiple roots. For comparisons, run the
-command once for each resolved base/head revision with the same selection. The
-recorder resolves revisions to full commit hashes and retains inline tests;
-keep this scope distinct from a production-only PR report. Inspect each accepted
-history row and its diagnostics. Failed or empty measurements are not zero scores.
-This command excludes `.strata/` locally and leaves hooks unchanged. Existing
-hook installations can omit selection arguments to use their saved settings.
+Open <http://127.0.0.1:8766/>. The server binds to loopback and the page
+refreshes every five seconds while visible. Plotly and syntax highlighting are
+bundled; no CDN is needed. Stop a foreground server with Ctrl-C.
 
-## Start or reuse the live dashboard
+## Compare two commits
 
 ```sh
-strata serve --repo /absolute/path/to/repo --port 8766
+strata scan <base> --source-root src
+strata scan <head> --source-root src
+strata serve --commit <base> --commit <head>
 ```
 
-For a comparison, add `--commit <base-hash> --commit <head-hash>` to that command.
-The server displays only those commits, in the supplied order, without changing
-the checkout. References resolve once at startup; aliases for the same commit
-are combined. New recordings refresh the measurements, while the selected
-hashes stay fixed. Restart with new hashes to review an updated PR.
+The dashboard then shows only those commits, in that order. References resolve
+once at startup, so restart with new hashes to review an updated PR.
 
-`/data.json` identifies the server: `repository_path`, `source_runtime` (the
-installed package directory), `requested_commits` (empty in history mode), and
-`head`. Plotly and syntax highlighting are bundled locally; no CDN is required.
+## Modes and scopes
 
-## Explore the measurements
+History mode follows HEAD's first-parent history; comparison mode shows only the
+commits you pass. The date view sorts by UTC commit time, which can differ from
+ancestry. Different analyzer versions, languages, roots, and inclusion policies
+appear as separate scopes. Each commit shows its latest recording, and a failed
+or missing language never falls back to an older success.
 
-The plots show source lines, cyclomatic and cognitive erosion, function complexity
-median/90th percentile/maximum, verbosity, flagged source lines, and scan duration. Counts are integers; displayed
-percentages and timings have at most one decimal. Full precision stays in logs.
+## Plots
 
-Verbosity is the recorded flagged-line ratio. Rust and JavaScript count clone
-lines only. Python uses the union of cloned, AST-flagged, and structural-rule lines;
-component counts overlap and must not be added. Missing measurements remain gaps.
+The plots show source lines, cyclomatic and cognitive erosion, function
+complexity (median, 90th percentile, maximum), verbosity, flagged lines, and
+scan duration. Python verbosity counts the union of cloned, AST-flagged, and
+structural-rule lines; the component counts overlap, so don't add them. Rust
+and JavaScript count clone lines only.
 
-The main hotspot view is a sunburst for the selected commit. Its concentric rings
-follow repository directories down to files. Tap a directory to open it, the
-center to go up, or Reset view to return to all selected source. Three levels are
-visible at a time. Tap a file to select its functions in the table. The Plot metric selector controls wedge sizes and the absolute timeline together.
-Complexity uses summed function CC. Cyclomatic erosion uses `CC * sqrt(function SLOC)`
-for functions above CC 10; cognitive erosion uses the corresponding cognitive
-complexity mass above 10. Verbosity uses flagged source lines counted once,
-including files with no functions. These additive amounts size the wedges;
-percentage rates remain in tooltips. Missing per-file verbosity makes the
-sunburst unavailable; historical gaps are scoped to the selected directory or
-file. A known zero amount stays zero and preserves navigation when switching
-metrics. Colors identify branches in every mode.
+The sunburst shows the selected commit's directories as rings. Tap a directory
+to open it, the center to go up, or Reset view to see everything. Tap a file to
+list its functions in the table. The Plot metric selector sets both the wedge
+sizes and the timeline. Hover percentages are relative to all selected source,
+even when zoomed.
 
-Hover percentages refer to all selected source even when
-zoomed. Small labels are hidden instead of overlapping; the tables retain access
-to individual files. Refresh preserves the open directory while it still exists,
-otherwise the path returns to all selected source. Tooltips and the selected
-region's metric row show cyclomatic/cognitive erosion, function CC median/p90/max,
-and verbosity. Erosion uses the analyzer's complexity-times-square-root-of-function-
-SLOC mass and threshold above 10. Function-free measured regions have zero erosion
-and unavailable percentiles. Region verbosity requires per-file flagged counts for
-all selected files; incomplete historical detail shows Unavailable. The recorder
-exports exact native flagged-line unions and validates their sums against the
-aggregate report.
+The timeline follows the open directory or file. Its bands are the immediate
+children: the top eight by peak value stay fixed and the rest are grouped as
+Other. Band colors match the sunburst and don't indicate severity. Selecting a
+point on the timeline moves the sunburst to that commit.
 
-The absolute timeline follows the open directory, or the selected file. Its
-stacked height is the selected metric's absolute amount, with units shown on the axis. Immediate child directories and files form the
-bands. The top eight children by peak selected metric amount remain fixed across the displayed
-history; remaining children form Other. Colors match those child categories in
-the sunburst and do not indicate severity. Opening a directory, selecting a file,
-or going up updates the timeline and tables together. Clearing a file returns to
-its containing directory. Root filtering applies to all three views; global
-metric plots retain their full measurement scope.
+Missing measurements show as gaps, never as zero. Refresh keeps the selected
+scope, commit, and directory while they still exist.
 
-Selecting a timeline measurement updates the sunburst to that commit, retaining
-the open path if it exists. Unknown details preserve the selection and appear as
-gaps. A known snapshot with zero complexity remains zero. Isolated measurements
-use stacked columns; consecutive measurements use stacked areas. Known absent
-paths reset the snapshot selection to all selected source. Each timeline segment
-retains zero values for paths absent from earlier or later complete snapshots.
+## Source view
 
-History serving follows HEAD's first-parent Git history. Comparison serving uses
-the supplied commit order, including commits outside that history. Date view uses UTC and sorts by
-commit timestamp, which can differ from ancestry. Measurements outside that
-history are omitted in history mode; comparison mode includes only the requested
-hashes. Different analyzer versions, languages, roots, and inclusion
-policies appear as separate scopes. Mixed-language recordings use the latest started
-attempt for each commit within a scope. Language results belong to that single
-attempt; a failure or missing result never falls back to an earlier success.
-The recorded-commit and language controls show complete, failed, no-source, and
-unrecorded results, including recordings with no successful measurements.
-Switching languages keeps the selected commit. Earlier individual measurements
-remain separate evidence. Missing detail artifacts leave aggregate
-metrics visible and create gaps in hotspot/distribution plots. One measured
-commit is a baseline, not an observed trend. Directory renames can move bands
-without changing complexity.
+The code icon beside a file or function opens its source at the selected
+commit, even if the working tree has changed. Metric sets the gutter shading:
+function ranges by complexity or erosion, or the exact flagged lines for
+verbosity. The minimap shows hotspots across the file. Measurements recorded
+without line locations show an unavailable notice instead of guessing.
 
-The server exposes the dashboard, `/data.json`, `/tree.json`, and `/source.json`.
-Tree and source requests use a commit recorded in the selected measurement scope;
-source previews accept regular tracked text files anywhere in that commit.
-It binds to loopback. While visible, the page
-checks every five seconds using conditional requests, pauses while hidden, and
-checks immediately on return. Refresh retains the chosen scope, older snapshot,
-and directory/file selection when they remain available. A view at the latest
-snapshot follows new measurements. In history mode, an unmeasured branch clears old metrics.
-Errors show an explicit unavailable status and retain the last received view.
+A sidebar lists the commit's tracked files, with each file's value for the
+selected metric. Files toggles it, and on mobile opens it as an overlay. Expand
+fills the screen. Untracked files and submodule contents aren't listed.
 
-### View source and hotspots
+Files over 256 KiB or 10,000 lines, binary files, symlinks, and submodules
+can't be previewed. A tree too large to list shows an error with a Retry button;
+the open file stays usable.
 
-Click the small code icon beside a file or function to open its source window.
-The filename still filters the dashboard. Function source buttons scroll to the
-recorded function range. Close the window with Close or Escape.
+If you repair or delete report directories, restart the server to reload them.
 
-Source comes from the selected Git commit, including when the working tree has
-changed. The open window stays on that commit during live refresh. Use Metric
-to change its gutter colors; this also selects the dashboard plot metric.
-Python, Rust, and JavaScript syntax highlighting is bundled locally.
-
-Tracked files appear in a sidebar beside the code. Parent folders open to reveal
-the current file, which has a blue selection marker. Click another file to open
-it at the same commit. Choose Files to collapse or show the sidebar; the choice
-carries over to the next source window. Expand fills the screen.
-On mobile, choose Files to open the tree; selecting a file returns to code.
-Escape closes the mobile file panel before closing the source window.
-
-File badges show the selected metric's recorded value, including zero. Warm
-shading compares file totals across the captured measurement scope. Blank badges
-have no shading; hover or focus the filename to see whether it was unmeasured or
-the metric is unavailable. The tree includes configuration, docs and dotfiles,
-with symlinks and submodules visible as entries. It excludes untracked working
-files and submodule contents. Unknown text languages display plain text.
-
-Complexity shades function ranges by CC. Cyclomatic and cognitive erosion shade
-functions above the corresponding complexity threshold of 10 using complexity
-multiplied by the square root of function SLOC. Gutter and minimap intensity use
-the maximum function score across the captured measurement scope; overlapping
-ranges use the highest score. Verbosity marks the exact union
-of flagged source lines. Measurements recorded without line locations display
-an unavailable notice for that metric; they do not infer locations from counts.
-
-Files over 256 KiB or 10,000 lines, binary content, symlinks, submodules and unavailable Git objects
-cannot be previewed. Every previewed file in a supported language is highlighted;
-other text displays plain with the metric gutter.
-Source and file navigation stay available while new recordings or backfills
-arrive; the window names the commit it shows. Measurements must include recorded
-line locations for metric highlighting.
-
-Tree loading rejects listings above 4 MiB of raw Git output, 10,000 combined file
-and directory nodes, or 8 MiB of JSON, and Git listing has a five-second deadline.
-An unavailable tree shows an error instead of omitting entries; the current code
-preview remains usable. Retry a failed tree request from the browser panel.
-
-The server refreshes its dataset when history or queue state changes. History
-mode also follows changes to checkout HEAD; comparisons retain their selected
-commits.
-If you repair or remove report artifacts without changing those inputs, restart
-it to reload them. Shut down the foreground server with Ctrl-C.
-
-## Persistent macOS service and Tailscale
-
-For a persistent service:
+## Persistent service on macOS
 
 ```sh
-strata service install --repo /absolute/path/to/repo \
-  --port 8766 --mount /strata/project --tailscale
+strata service install --port 8766 --tailscale
+strata service remove
 ```
 
-This installs a repository-specific user launch agent that runs `strata serve`
-with the tool's interpreter. It saves the package directory as
-`source_runtime` in `.strata/server-settings.json`; `/data.json` reports the
-running server's runtime path. It starts at login and restarts after failures. Omit `--tailscale` for a
-loopback-only service. Other operating systems can use the foreground command
-with their own service manager. Change the port for additional repositories;
-the default URL mount is `/strata/<repository name>`. Choose a distinct port and
-mount for each repository. Each service reads only its repository's measurements.
+This installs a launch agent for the repository that starts at login and
+restarts after failures. Omit `--tailscale` for loopback only. Each repository
+needs its own port; the default tailnet mount is `/strata/<repository name>`,
+and `--mount` overrides it.
 
-Tailscale Serve adds the specified HTTPS path on port 443 and preserves other
-handlers. A conflicting handler is rejected. The installer prints the tailnet
-URL and saves ownership in `.strata/server-settings.json`. Tailscale must be
-running, and its Serve/HTTPS prerequisites must be enabled for the tailnet. The
-phone must be connected to the tailnet and the computer online. Closing the
-terminal does not stop the launch agent; a sleeping or offline computer cannot
-serve updates.
+With `--tailscale`, Tailscale Serve adds that HTTPS path on port 443 and leaves
+other handlers alone; a conflicting handler is rejected. Tailscale must be
+running with Serve and HTTPS enabled for the tailnet. A failed install restores
+the previous service and removes a mount it created.
 
-Activation
-failures restore the previous service configuration and remove a newly created
-proxy mount where cleanup succeeds. Inspect reported cleanup failures before
-retrying. Remove the service before changing its port, mount, or Tailscale mode:
+Remove the service before changing its port, mount, or Tailscale mode. Removal
+keeps history and reports. Server logs are `.strata/server.stdout.log` and
+`.strata/server.stderr.log`.
 
-```sh
-strata service remove --repo /absolute/path/to/repo
-```
-
-Removal targets only this repository's agent and matching owned Tailscale mount.
-It retains recorded history and reports. Server diagnostics are in
-`.strata/server.stdout.log` and `.strata/server.stderr.log`.
-
-After upgrading Strata, restart the server and reload the browser. For a persistent service, rerun the
-installation command with the same port, mount, and Tailscale mode. For a
-foreground server, stop it and run the serving command again. Automatic metric
-refresh updates measurements within the running server; it does not reload
-server code or the browser's dashboard assets.
-
-## Verification
-
-Start the dashboard and inspect it at desktop and phone widths. Confirm
-metric totals against the accepted analyzer report and preserve missing-data gaps.
-For live serving, verify the loopback endpoint, mounted Tailscale URL with and
-without its trailing slash, automatic refresh, and rejection of arbitrary file
-paths. Inspect existing Tailscale handlers before and after installation. Do not
-claim phone connectivity from a desktop viewport test.
+After upgrading Strata, rerun `strata service install` with the same options and
+reload the browser. Live refresh updates measurements, not server code or page
+assets.
