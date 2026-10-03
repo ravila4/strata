@@ -1,6 +1,6 @@
 # Strata
 
-Strata records code metrics from Git commits and displays them in a live dashboard.
+Strata records code metrics from Git commits (cognitive erosion, cyclomatic erosion, function complexity, verbosity) and displays them in a live dashboard.
 It uses [scb-check](https://github.com/gabeorlanski/scb-check) to measure Python,
 Rust, and JavaScript source.
 
