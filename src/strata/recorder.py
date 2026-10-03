@@ -415,7 +415,8 @@ def record_all(
             )
 
 
-def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
+def record_manual(repo: Path, output: Path, inputs: dict, commits: list[str]) -> None:
+    """Record commits in order while holding the worker lock for the whole run."""
     output.mkdir(parents=True, exist_ok=True)
     with (output / "worker.lock").open("a") as worker_lock:
         try:
@@ -425,14 +426,20 @@ def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
                 "Recorder busy; retry after the active recording finishes"
             ) from error
         try:
-            record_all(
-                repo,
-                output,
-                inputs["source_roots"],
-                inputs["python"],
-                commit=commit,
-                languages=inputs["languages"],
-            )
+            for index, commit in enumerate(commits, 1):
+                if len(commits) > 1:
+                    print(
+                        f"strata: [{index}/{len(commits)}] {commit[:12]}",
+                        file=sys.stderr,
+                    )
+                record_all(
+                    repo,
+                    output,
+                    inputs["source_roots"],
+                    inputs["python"],
+                    commit=commit,
+                    languages=inputs["languages"],
+                )
         finally:
             # Hooks can enqueue while a manual scan owns the worker lock.
             with (output / "queue.lock").open("a") as queue_lock:
@@ -443,6 +450,38 @@ def record_manual(repo: Path, output: Path, inputs: dict, commit: str) -> None:
                     "pending"
                 ):
                     spawn_worker(repo, output)
+
+
+def measured_commits(rows: list[dict], inputs: dict) -> set[str]:
+    """Commits with a recording of this selection that finished every language."""
+    keys = ("source_roots", "analyzer", "inclusion_policy", "scope")
+    finished = {"complete", "not_applicable"}
+    recordings = {}
+    for row in rows:
+        identifier = row.get("recording_id")
+        if identifier is None:
+            continue
+        if row["status"] == "started":
+            if all(row.get(key) == inputs[key] for key in keys):
+                recordings[identifier] = (row["commit"], set(row["languages"]), set())
+        elif identifier in recordings and row["status"] in finished:
+            recordings[identifier][2].add(row["language"])
+    return {
+        commit for commit, expected, done in recordings.values() if expected <= done
+    }
+
+
+def backfill_commits(
+    repo: Path, revision: str, since: str | None = None, every: int = 1
+) -> list[str]:
+    """First-parent history of a revision, newest first, sampled from the tip."""
+    if every < 1:
+        raise ValueError("--every must be a positive number of commits")
+    command = ["rev-list", "--first-parent"]
+    if since:
+        command.append(f"--since={since}")
+    commits = git(repo, *command, "--end-of-options", revision).decode().split()
+    return commits[::every]
 
 
 def exclude_output(repo: Path) -> None:
@@ -459,27 +498,63 @@ def exclude_output(repo: Path) -> None:
             stream.write("\n/.strata/\n")
 
 
-def scan(repo: Path, revision: str, roots: list[str] | None) -> None:
-    """Measure one revision with explicit roots or the installed hook settings."""
-    repo = Path(git(repo.resolve(), "rev-parse", "--show-toplevel").decode().strip())
-    commit = (
-        git(repo, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
-        .decode()
-        .strip()
-    )
-    output = repo / ".strata"
+def recording_inputs(repo: Path, roots: list[str] | None) -> dict:
+    """Use explicit roots with this interpreter, or the installed hook settings."""
     if roots:
-        inputs = selection(
+        return selection(
             {
                 "format": SETTINGS_FORMAT,
                 "source_roots": canonical_roots(roots),
                 "python": sys.executable,
             }
         )
-    else:
-        settings_path = output / "settings.json"
-        if not settings_path.exists():
-            raise ValueError("Pass --source-root or install the hook first")
-        inputs = selection(json.loads(settings_path.read_text()))
+    settings_path = repo / ".strata" / "settings.json"
+    if not settings_path.exists():
+        raise ValueError("Pass --source-root or install the hook first")
+    return selection(json.loads(settings_path.read_text()))
+
+
+def toplevel(repo: Path) -> Path:
+    return Path(git(repo.resolve(), "rev-parse", "--show-toplevel").decode().strip())
+
+
+def scan(repo: Path, revision: str, roots: list[str] | None) -> None:
+    """Measure one revision with explicit roots or the installed hook settings."""
+    repo = toplevel(repo)
+    commit = (
+        git(repo, "rev-parse", "--verify", "--end-of-options", f"{revision}^{{commit}}")
+        .decode()
+        .strip()
+    )
+    inputs = recording_inputs(repo, roots)
     exclude_output(repo)
-    record_manual(repo, output, inputs, commit)
+    record_manual(repo, repo / ".strata", inputs, [commit])
+
+
+def backfill(
+    repo: Path,
+    revision: str,
+    roots: list[str] | None,
+    since: str | None = None,
+    every: int = 1,
+) -> None:
+    """Measure first-parent history that this selection has not finished."""
+    repo = toplevel(repo)
+    inputs = recording_inputs(repo, roots)
+    output = repo / ".strata"
+    commits = backfill_commits(repo, revision, since, every)
+    history = output / "history.jsonl"
+    rows = (
+        [json.loads(line) for line in history.read_text().splitlines() if line.strip()]
+        if history.exists()
+        else []
+    )
+    measured = measured_commits(rows, inputs)
+    pending = [commit for commit in commits if commit not in measured]
+    print(
+        f"strata: {len(pending)} of {len(commits)} commits need measuring",
+        file=sys.stderr,
+    )
+    if pending:
+        exclude_output(repo)
+        record_manual(repo, output, inputs, pending)

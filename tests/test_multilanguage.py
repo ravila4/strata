@@ -219,7 +219,7 @@ def test_manual_scan_hands_off_hook_enqueued_during_analysis(repo, monkeypatch):
             repo,
             output,
             recorder.selection(json.loads((output / "settings.json").read_text())),
-            git(repo, "rev-parse", "HEAD"),
+            [git(repo, "rev-parse", "HEAD")],
         )
     test_hooks.wait_for(
         lambda: (output / "history.jsonl").exists() and len(history(output)) == 4
@@ -294,7 +294,7 @@ def test_hook_install_accepts_manual_recording_lock_files(repo):
     inputs = recorder.selection(
         {"format": 3, "source_roots": ["empty"], "python": "/missing/python"}
     )
-    recorder.record_manual(repo, output, inputs, git(repo, "rev-parse", "HEAD"))
+    recorder.record_manual(repo, output, inputs, [git(repo, "rev-parse", "HEAD")])
     saved = (output / "history.jsonl").read_bytes()
     hooks.install(repo, ["src"])
     assert (output / "history.jsonl").read_bytes() == saved
@@ -311,7 +311,7 @@ def test_hook_install_rejects_nonregular_manual_lock_files(repo, filename, kind)
         recorder.selection(
             {"format": 3, "source_roots": ["empty"], "python": "/missing/python"}
         ),
-        git(repo, "rev-parse", "HEAD"),
+        [git(repo, "rev-parse", "HEAD")],
     )
     lock_path = output / filename
     lock_path.unlink()
