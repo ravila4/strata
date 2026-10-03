@@ -1,13 +1,12 @@
 ---
 name: strata
-description: Measure and interpret code structure metrics (complexity erosion, verbosity, clones) across Git history with the strata CLI. Use when asked to run strata, scb-check, or SlopCodeBench metrics on a repo or PR, compare base and head, backfill or record commit history, open the metrics dashboard, or find where complexity is concentrating. Scores point at code worth reading; they are not a verdict on quality or correctness.
+description: Measure and interpret code structure metrics (complexity erosion, verbosity, clones) across Git history with the strata CLI. Use when asked to run strata, scb-check, or SlopCodeBench metrics on a repo or PR, compare base and head, backfill or record commit history, open the metrics dashboard, or find where complexity is concentrating. Scores flag code worth reading, not quality or correctness.
 ---
 
 # Strata
 
 Strata records static structure metrics for Git commits and serves them in a
-live dashboard. Use the numbers to decide what to read, then judge the code
-itself. A high score means "worth a look", not "bad code".
+live dashboard. A high score means "worth a look", not "bad code".
 
 ## Commands
 
@@ -19,14 +18,13 @@ itself. A high score means "worth a look", not "bad code".
 | `strata hook install --source-root DIR` / `remove` | Record every commit in the background |
 | `strata service install` / `remove` | Persistent macOS dashboard, optionally over Tailscale |
 
-Commands act on the current repository; pass `--repo` for another. Choose
-source roots from the repository layout. Separate test files, fixtures, and
-vendored code are excluded automatically; inline tests are kept. Once a hook is
+Commands act on the current repository; pass `--repo` for another. Separate
+test files, fixtures, and vendored code are excluded; inline tests are kept. Once a hook is
 installed, `scan` and `backfill` reuse its roots. If `strata` is missing, ask
 before installing it (`uv tool install git+https://github.com/ravila4/strata.git`).
 
-Scanning and serving are fine whenever metrics are requested. Install the hook
-or the macOS service only when the user asks for automation. A metric check
+Scan and serve whenever metrics are requested. Install the hook or the macOS
+service only when the user asks for automation. A metric check
 never authorizes editing code, posting PR comments, or adding CI gates.
 
 ## Compare a PR
@@ -34,16 +32,15 @@ never authorizes editing code, posting PR comments, or adding CI gates.
 1. Resolve full hashes: the head commit and the merge base with the target
    branch, not the moving branch tip. For GitHub, `gh pr view` gives both refs.
 2. `strata scan <base>` and `strata scan <head>` with the same `--source-root`.
-3. `strata serve --commit <base> --commit <head>` shows only those two commits
-   without touching the checkout.
+3. `strata serve --commit <base> --commit <head>` shows only those two commits.
 
 ## Serve the dashboard
 
 Run `strata serve` in a background session that outlives the reply, logging to
 `.strata/server.stdout.log` and `.strata/server.stderr.log`. Before returning
 the URL, check that `/data.json` has the right `repository_path` and, for a
-comparison, `requested_commits` in order. Pick another `--port` if 8766 is
-taken. Reuse a running server only after the same checks.
+comparison, `requested_commits` in order. Reuse a running server only after
+the same checks.
 
 ## Read the results
 
@@ -58,13 +55,12 @@ taken. Reuse a running server only after the same checks.
 Metrics:
 
 - **Erosion**: share of function mass (`cc * sqrt(sloc)`) held by functions with
-  CC above 10. It measures how concentrated complexity is, not a defect rate.
-  Report `high_cc_functions` alongside it. `cog_erosion` is the cognitive analogue.
+  CC above 10, so it measures how concentrated complexity is. Report `high_cc_functions` alongside it. `cog_erosion` is the cognitive analogue.
 - **Verbosity**: flagged lines divided by SLOC. Python flags clones, AST rules,
   and trivial wrappers; Rust and JavaScript flag clones only, so don't compare
   verbosity across languages.
-- Report ratio changes in percentage points and show SLOC beside them, since
-  the denominator moves too. One commit is a baseline, not a trend.
+- Report ratio changes in percentage points with SLOC beside them. One commit
+  is a baseline, not a trend.
 
 ## Turn metrics into suggestions
 
@@ -78,10 +74,8 @@ Metrics:
    - **justified**: input validation, protocol handling, and required interfaces
      often need the branching or repetition the rules flag.
    - **uncertain**: say what would settle it.
-4. Never suggest extracting helpers only to get under a threshold; that moves
-   the number without improving the design.
+4. Never suggest extracting helpers just to get under a threshold.
 
 Lead with the dashboard URL and what changed, then the short labeled list. Keep
-correctness and test results separate from these measurements. For details on
-recording and the dashboard, see `docs/recording.md` and `docs/dashboard.md` in
-the Strata repository.
+correctness and test results separate from these measurements. For hook and
+dashboard behavior, see `docs/` in the Strata repository.
