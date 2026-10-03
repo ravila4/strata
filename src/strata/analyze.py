@@ -20,8 +20,8 @@ def main() -> None:
     snapshot = args.snapshot.resolve()
     manifest = json.loads(args.manifest.read_text())
     files = tuple(snapshot / path for path in manifest)
-    # Default severity filtering drops info-level findings; including them
-    # overflags verbosity on typical codebases.
+    # scb-check's defaults: warning-level rules only, after per-rule count
+    # thresholds, honoring `scbc ignore` and `scbc boundary` comments.
     flags = analyze_files(files).flags
     aggregate = compute_report(flags).to_dict()
     clones = {entry.file: entry.lines for entry in flags.lines.clone_sloc_lines_by_file}

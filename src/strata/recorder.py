@@ -21,7 +21,7 @@ EXTENSIONS = {
     "rust": {".rs"},
 }
 ANALYZER = "scb-check==0.2.0"
-POLICY = "tracked-source-v1"
+POLICY = "tracked-source-v2"
 SETTINGS_FORMAT = 3
 SCOPE = "separate test files excluded; inline tests retained"
 

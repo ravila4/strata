@@ -56,9 +56,10 @@ Metrics:
 
 - **Erosion**: share of function mass (`cc * sqrt(sloc)`) held by functions with
   CC above 10, so it measures how concentrated complexity is. Report `high_cc_functions` alongside it. `cog_erosion` is the cognitive analogue.
-- **Verbosity**: flagged lines divided by SLOC. Python flags clones, AST rules,
-  and trivial wrappers; Rust and JavaScript flag clones only, so don't compare
-  verbosity across languages.
+- **Verbosity**: flagged lines divided by SLOC. Python flags clones,
+  warning-level AST rules, and trivial wrappers, honoring `# scbc ignore`
+  comments; Rust and JavaScript flag clones only, so don't compare verbosity
+  across languages.
 - Report ratio changes in percentage points with SLOC beside them. One commit
   is a baseline, not a trend.
 
