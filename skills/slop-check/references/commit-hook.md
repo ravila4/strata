@@ -55,7 +55,8 @@ Existing pre-commit checks keep their existing blocking behavior. The hook
 exports source from the captured commit,
 ignoring staged and unstaged edits. The hook records commits made with
 `--no-verify` too; Git still runs post-commit for those commits. Git operations
-that do not invoke post-commit require a manual recorder invocation.
+that do not invoke post-commit require `strata scan`, or `strata backfill` to
+measure every first-parent commit the history is missing.
 
 Snapshots omit symlinks, separate test files, test/fixture/vendor/generated
 directories, and unsupported file extensions. **Inline test code is retained.** This

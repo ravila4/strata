@@ -13,6 +13,12 @@ def scan(args: argparse.Namespace) -> None:
     recorder.scan(args.repo, args.revision, args.source_root)
 
 
+def backfill(args: argparse.Namespace) -> None:
+    recorder.backfill(
+        args.repo, args.revision, args.source_root, args.since, args.every
+    )
+
+
 def hook_install(args: argparse.Namespace) -> None:
     hooks.install(args.repo, args.source_root)
 
@@ -67,6 +73,22 @@ def parser() -> argparse.ArgumentParser:
     )
     command.add_argument("revision", nargs="?", default="HEAD")
     command.set_defaults(run=scan)
+
+    command = commands.add_parser(
+        "backfill",
+        parents=[repo, roots],
+        help="measure past commits on a branch",
+        description="Measure first-parent history, newest first, skipping commits "
+        "already measured with the same selection.",
+    )
+    command.add_argument("revision", nargs="?", default="main")
+    command.add_argument(
+        "--since", help="only commits after this date, e.g. 2026-01-01"
+    )
+    command.add_argument(
+        "--every", type=int, default=1, metavar="N", help="measure every Nth commit"
+    )
+    command.set_defaults(run=backfill)
 
     hook = commands.add_parser("hook", help="record every commit in the background")
     hook_commands = hook.add_subparsers(required=True, metavar="action")
