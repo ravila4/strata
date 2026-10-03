@@ -470,6 +470,22 @@ def measured_commits(rows: list[dict], inputs: dict) -> set[str]:
     return {commit for commit, done in recordings.values() if expected <= done}
 
 
+def default_branch(repo: Path) -> str:
+    """Best guess at the repository's default branch for backfill."""
+    try:
+        ref = git(repo, "symbolic-ref", "refs/remotes/origin/HEAD").decode().strip()
+        return ref.rsplit("/", 1)[-1]
+    except subprocess.CalledProcessError:
+        pass
+    for candidate in ("main", "master"):
+        try:
+            git(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{candidate}")
+        except subprocess.CalledProcessError:
+            continue
+        return candidate
+    return "HEAD"
+
+
 def backfill_commits(
     repo: Path, revision: str, since: str | None = None, every: int = 1
 ) -> list[str]:
