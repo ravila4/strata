@@ -69,8 +69,9 @@ rows by scope if selection changes. Rust and JavaScript verbosity measures
 clone lines only, while erosion measures complexity concentration, not defects.
 
 Each attempt gets a unique `.slop-check/reports/<commit>-<suffix>/` directory
-with a source snapshot and manifest, explicit analyzer config, command, tool
-versions, raw JSON, stderr, and a summary. `.slop-check/history.jsonl` contains
+with a source manifest, explicit analyzer config, command, tool versions, raw
+JSON, stderr, and a summary. Failed attempts also keep the exported source
+snapshot for diagnosis; other attempts discard it, since Git holds the source. `.slop-check/history.jsonl` contains
 a start event identifying each recording and its expected languages, followed by
 one result per language: commit, time, scope, status, duration, report path, and
 accepted metrics. All results share the recording identifier. Only `complete` rows have metrics. Empty scopes are

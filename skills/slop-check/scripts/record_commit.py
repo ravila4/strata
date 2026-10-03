@@ -357,6 +357,9 @@ def record(
         row.pop("metrics", None)
         row["error"] = str(error)
         (directory / "error.txt").write_text(str(error) + "\n")
+    # Git holds every recorded commit's source; keep a copy only to diagnose a failed scan.
+    if row["status"] != "failed":
+        shutil.rmtree(directory / "snapshot", ignore_errors=True)
     row["duration_seconds"] = round(time.monotonic() - started, 3)
     (directory / "summary.json").write_text(json.dumps(row, indent=2) + "\n")
     append_history(output, row)
