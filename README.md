@@ -11,7 +11,7 @@ hotspots.
 
 [![Strata's directory explorer and commit timeline](docs/images/dashboard.png)](docs/images/dashboard.png)
 
-Strata measuring its own recorder and server across two commits.
+*Strata measuring its own source across ten commits.*
 
 [![Commit source with syntax highlighting, complexity hotspots, and a minimap](docs/images/source-hotspots.png)](docs/images/source-hotspots.png)
 
