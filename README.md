@@ -24,66 +24,61 @@ locations are available for measurements recorded with line details.
 
 ## Setup
 
-Requires Git, Python 3.10+, and [uv](https://docs.astral.sh/uv/). The recorder and dashboard
-scripts live in `skills/slop-check/`.
+Requires Git and [uv](https://docs.astral.sh/uv/). Install the `strata` command:
 
 ```sh
-git clone https://github.com/ravila4/strata.git
-cd strata
+uv tool install git+https://github.com/ravila4/strata.git
 ```
 
-For a Python project with source under `src`, install the advisory commit hook and
-record an initial measurement:
+In a project with source under `src`, install the commit hook and record the
+current commit:
 
 ```sh
-python3 skills/slop-check/scripts/install_hook.py \
-  --repo /absolute/path/to/project --source-root src
-python3 skills/slop-check/scripts/record_commit.py \
-  --repo /absolute/path/to/project
+strata hook install --source-root src
+strata scan
 ```
 
-Choose source roots for the project being measured. Every recording automatically
-scans Python, JavaScript, and Rust beneath those roots, with separate metrics for
-each language. Adding a supported language under those roots needs no setup change. The hook records future commits in the background. One Strata installation
-can serve multiple projects. Application scripts and dashboard assets stay in this
-installation; each project's excluded `.slop-check/` directory holds its configuration,
-measurements, reports, queue state, logs, and minimal hook wrappers.
+Every recording scans Python, JavaScript, and Rust under the source roots, with
+separate metrics per language. The hook records future commits in the
+background. Each project's `.strata/` directory, excluded from Git, holds its
+configuration, measurements, reports, queue state, and logs.
 
 Start the live dashboard:
 
 ```sh
-uv run --script skills/slop-check/scripts/serve_dashboard.py \
-  --repo /absolute/path/to/project --port 8766
+strata serve
 ```
 
 Open <http://127.0.0.1:8766/>. New measurements refresh automatically while the
-dashboard is visible. Use a different port for each project served at the same time.
+dashboard is visible. Use `--port` to serve several projects at once.
 Measurements are advisory; they describe source structure and complexity concentration.
 
-See [commit recording](skills/slop-check/references/commit-hook.md) for source
-selection and hook behavior, and [dashboard usage](skills/slop-check/references/dashboard.md)
-for navigation, persistent macOS service setup, and Tailscale access. The
-[agent skill](skills/slop-check/SKILL.md) also supports snapshot comparisons.
-Updates to the shared recorder apply to newly launched processes. Let active scans
-finish before replacing runtime files. After updating dashboard code or assets,
-restart the server and reload the browser. Keep Strata at its installed location;
-if you move it, rerun each project's installers from the new location.
+| Command | Does |
+|---|---|
+| `strata scan [REV]` | Measure one commit (default `HEAD`) |
+| `strata hook install` / `remove` | Record every commit in the background |
+| `strata serve` | Serve the dashboard on loopback |
+| `strata service install` / `remove` | Keep the dashboard running on macOS, optionally over Tailscale |
+
+Commands act on the current repository; pass `--repo` for another. See
+[commit recording](skills/slop-check/references/commit-hook.md) and
+[dashboard usage](skills/slop-check/references/dashboard.md) for details. After
+`uv tool upgrade strata`, restart running servers.
 
 ## Development
 
-Run from this repository:
-
 ```sh
-uv run --with pytest --with plotly==6.3.1 pytest -q skills/slop-check/tests
-node --test skills/slop-check/tests/dashboard.test.cjs
-uvx ruff check skills/slop-check/scripts skills/slop-check/tests
+uv run pytest -q tests
+node --test tests/dashboard.test.cjs
+uv run ruff check src tests
 ```
 
 Browser checks require Chromium and WebKit installed through Playwright:
 
 ```sh
 uv run --with playwright playwright install chromium webkit
-uv run --script skills/slop-check/tests/source_browser.py
+uv run --with playwright python tests/source_browser.py
+uv run --with playwright python tests/multilanguage_browser.py
 ```
 
 ## Credits
@@ -100,4 +95,4 @@ and metric definitions behind this project.
 ## License
 
 Strata is licensed under the [MIT License](LICENSE). Bundled third-party assets
-retain their own licenses in [the vendor directory](skills/slop-check/assets/vendor/).
+retain their own licenses in [the vendor directory](src/strata/assets/vendor/).

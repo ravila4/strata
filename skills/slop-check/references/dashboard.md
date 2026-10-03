@@ -1,16 +1,15 @@
 # Code evolution dashboard
 
 Use the live dashboard for metric checks, comparisons, and recorded history. It
-reads `.slop-check/history.jsonl`; record the selected commits before serving.
-Run commands from the shared skill installation's directory, replacing
-repository paths below. Each repository keeps its own measurements and service
-configuration in `.slop-check/`; scripts and dashboard assets remain shared.
+reads `.strata/history.jsonl`; record the selected commits before serving.
+Commands act on the current repository; pass `--repo` for another. Each
+repository keeps its own measurements and service configuration in
+`.strata/`; the installed `strata` tool is shared.
 
 ## Record without installing a hook
 
 ```sh
-python3 scripts/record_commit.py --repo /absolute/path/to/repo \
-  --source-root src --commit HEAD
+strata scan --repo /absolute/path/to/repo --source-root src HEAD
 ```
 
 Choose explicit relative source roots. Python, JavaScript, and Rust are
@@ -19,13 +18,13 @@ command once for each resolved base/head revision with the same selection. The
 recorder resolves revisions to full commit hashes and retains inline tests;
 keep this scope distinct from a production-only PR report. Inspect each accepted
 history row and its diagnostics. Failed or empty measurements are not zero scores.
-This command excludes `.slop-check/` locally and leaves hooks unchanged. Existing
+This command excludes `.strata/` locally and leaves hooks unchanged. Existing
 hook installations can omit selection arguments to use their saved settings.
 
 ## Start or reuse the live dashboard
 
 ```sh
-uv run --script scripts/serve_dashboard.py --repo /absolute/path/to/repo --port 8766
+strata serve --repo /absolute/path/to/repo --port 8766
 ```
 
 For a comparison, add `--commit <base-hash> --commit <head-hash>` to that command.
@@ -35,11 +34,11 @@ are combined. New recordings refresh the measurements, while the selected
 hashes stay fixed. Restart with new hashes to review an updated PR.
 
 Run the server in a background session that remains alive after the reply, retain
-its session or process identifier, save logs as `.slop-check/server.stdout.log`
-and `.slop-check/server.stderr.log`, and return `http://127.0.0.1:8766/`.
+its session or process identifier, save logs as `.strata/server.stdout.log`
+and `.strata/server.stderr.log`, and return `http://127.0.0.1:8766/`.
 Verify that `/` responds and `/data.json` has `repository_path` matching the
-canonical repository path, `source_runtime` matching the resolved shared skill
-directory, and the intended measurements. For a comparison,
+canonical repository path, `source_runtime` matching the installed `strata`
+package directory, and the intended measurements. For a comparison,
 `requested_commits` must match the ordered resolved hashes and `head` must match
 the last selected hash. For history serving, `requested_commits` must be empty
 and `head` must match checkout HEAD.
@@ -183,47 +182,45 @@ it to reload them. Shut down the foreground server with Ctrl-C.
 For an explicitly requested persistent service:
 
 ```sh
-python3 scripts/install_server.py --repo /absolute/path/to/repo \
-  --port 8766 --mount /slop/project --tailscale
+strata service install --repo /absolute/path/to/repo \
+  --port 8766 --mount /strata/project --tailscale
 ```
 
-This prepares dependencies and installs a repository-specific user launch agent
-that runs the shared dashboard server. It saves the resolved skill directory as
-`source_runtime` in `.slop-check/server-settings.json`; `/data.json` reports the
+This installs a repository-specific user launch agent that runs `strata serve`
+with the tool's interpreter. It saves the package directory as
+`source_runtime` in `.strata/server-settings.json`; `/data.json` reports the
 running server's runtime path. It starts at login and restarts after failures. Omit `--tailscale` for a
 loopback-only service. Other operating systems can use the foreground command
 with their own service manager. Change the port for additional repositories;
-the default URL mount is `/slop/<repository name>`. Choose a distinct port and
+the default URL mount is `/strata/<repository name>`. Choose a distinct port and
 mount for each repository. Each service reads only its repository's measurements.
 
 Tailscale Serve adds the specified HTTPS path on port 443 and preserves other
 handlers. A conflicting handler is rejected. The installer prints the tailnet
-URL and saves ownership in `.slop-check/server-settings.json`. Tailscale must be
+URL and saves ownership in `.strata/server-settings.json`. Tailscale must be
 running, and its Serve/HTTPS prerequisites must be enabled for the tailnet. The
 phone must be connected to the tailnet and the computer online. Closing the
 terminal does not stop the launch agent; a sleeping or offline computer cannot
 serve updates.
 
-Reinstalling prepares dependencies before stopping the existing agent. Activation
+Activation
 failures restore the previous service configuration and remove a newly created
 proxy mount where cleanup succeeds. Inspect reported cleanup failures before
 retrying. Remove the service before changing its port, mount, or Tailscale mode:
 
 ```sh
-python3 scripts/install_server.py --repo /absolute/path/to/repo --remove
+strata service remove --repo /absolute/path/to/repo
 ```
 
 Removal targets only this repository's agent and matching owned Tailscale mount.
 It retains recorded history and reports. Server diagnostics are in
-`.slop-check/server.stdout.log` and `.slop-check/server.stderr.log`.
+`.strata/server.stdout.log` and `.strata/server.stderr.log`.
 
-After updating server code or dashboard assets in the shared installation,
-restart the server and reload the browser. For a persistent service, rerun the
+After upgrading Strata, restart the server and reload the browser. For a persistent service, rerun the
 installation command with the same port, mount, and Tailscale mode. For a
 foreground server, stop it and run the serving command again. Automatic metric
 refresh updates measurements within the running server; it does not reload
-server code or the browser's dashboard assets. If the installation moves, rerun
-each repository's installers from its new location to update `source_runtime`.
+server code or the browser's dashboard assets.
 
 ## Verification
 

@@ -13,8 +13,8 @@ explains why. A score alone is insufficient grounds for a refactor.
 
 When the user requests automatic local metric recording, use
 [references/commit-hook.md](references/commit-hook.md) and the bundled installer.
-Install from the shared skill directory. Repository hooks use that installation;
-they keep measurements and configuration in each repository's `.slop-check/`.
+Use `strata hook install`. Each repository keeps its measurements and
+configuration in its own `.strata/`.
 This mode queues committed snapshots after successful commits and coalesces pending work. It does not
 interpret findings or create a PR comparison. Ordinary requests to run a slop
 check do not authorize hook installation.
