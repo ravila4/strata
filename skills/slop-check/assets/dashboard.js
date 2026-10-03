@@ -160,7 +160,7 @@ function dateAxis(points) {
 function sourceURL(href, selection) {
   const url=dataURL(href);
   url.pathname=url.pathname.replace(/data\.json$/, 'source.json');
-  for(const key of ['commit','path','scope','revision']) url.searchParams.set(key,selection[key]);
+  for(const key of ['commit','path','scope']) url.searchParams.set(key,selection[key]);
   return url;
 }
 
@@ -533,7 +533,7 @@ if (typeof document !== 'undefined') {
     sourceController=new AbortController();
     const controller=sourceController;
     const point=points[selected];
-    const selection={commit:point.commit,path:target.path,scope:$('scope').value,revision:data.revision};
+    const selection={commit:point.commit,path:target.path,scope:series.id};
     sourceScales=repositoryHeatScales(point.details);
     sourceTarget=target;sourceResponse=null;sourceMap=null;sourceMapHeatValues=null;mapDrag=null;minimap.hidden=true;
     $('source-title').replaceChildren();
@@ -795,7 +795,7 @@ if (typeof document !== 'undefined') {
     const selectedRecording=(data.recordings || []).find(row=>row.recording_id===recordingID);
     const identity=series?scopeIdentity(series):null;
     const oldCommit=points[selected]?.commit;
-    const followLatest=selected===points.length-1;
+    const hadSnapshot=points.length>0, followLatest=hadSnapshot && selected===points.length-1;
     const root=$('root').value, file=selectedFile, level=sunLevel;
     data=next;
     $('scope').replaceChildren();
@@ -818,11 +818,14 @@ if (typeof document !== 'undefined') {
     for(const warning of data.warnings) {const item=document.createElement('li');item.textContent=warning;$('warning-list').append(item);}
     $('warning-count').textContent=`${data.warnings.length} data-availability notices`;
     const replacement=(data.recordings || []).find(row=>selectedRecording && row.commit===selectedRecording.commit && row.analyzer===selectedRecording.analyzer && row.inclusion_policy===selectedRecording.inclusion_policy && JSON.stringify(row.source_roots)===JSON.stringify(selectedRecording.source_roots));
-    coverageControls(replacement?.recording_id || recordingID,recordingLanguage);
-    if(coverageActive && (data.recordings || []).length) {
-      if(replacement?.recording_id!==recordingID && sourceDialog.open) sourceDialog.close();
+    // A language without measurements has no snapshot to follow, and a commit
+    // that lost its measurements keeps its coverage view instead of jumping.
+    const snapshotLost=!followLatest && points[selected]?.commit!==oldCommit;
+    if(coverageActive && replacement && (!hadSnapshot || snapshotLost)) {
+      coverageControls(replacement.recording_id,recordingLanguage);
       showCoverage(true);
-    } else $('recording-coverage').hidden=true;
+    } else if(points[selected]) syncCoverage();
+    else {coverageControls();$('recording-coverage').hidden=true;}
   }
   if (location.protocol==='http:' || location.protocol==='https:') {
     let inFlight=false, timer=null, etag=null;

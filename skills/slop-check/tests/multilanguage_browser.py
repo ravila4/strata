@@ -14,6 +14,48 @@ from playwright.sync_api import sync_playwright
 from test_hooks import git, load
 
 
+def check_live_following(browser, recorder, server_module) -> None:
+    """A live page shows new recordings whether it opened empty or at the latest."""
+    with tempfile.TemporaryDirectory() as temporary:
+        repo = Path(temporary)
+        git(repo, "init", "-q")
+        git(repo, "config", "user.name", "Test")
+        git(repo, "config", "user.email", "test@example.com")
+        (repo / "src").mkdir()
+        (repo / "src/main.py").write_text("def decision(x):\n    return x + 1\n")
+        git(repo, "add", ".")
+        git(repo, "commit", "-qm", "initial")
+        output = repo / ".slop-check"
+        server = server_module.make_server(repo, 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 900})
+            page.goto(f"http://127.0.0.1:{server.server_port}")
+            assert page.locator("#recording-coverage").is_hidden()
+            for subject in ("first", "second"):
+                if subject == "second":
+                    git(repo, "commit", "--allow-empty", "-qm", subject)
+                recorder.record_all(repo, output, ["src"], "uvx")
+                commit = git(repo, "rev-parse", "HEAD")[:8]
+                page.wait_for_function(
+                    "commit=>!document.getElementById('recording-coverage').hidden"
+                    " && document.querySelector('#snapshot option:checked')"
+                    "?.textContent.startsWith(commit)",
+                    arg=commit,
+                    timeout=10000,
+                )
+                assert (
+                    page.locator("#recording option:checked")
+                    .inner_text()
+                    .startswith(commit)
+                )
+            page.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 def main() -> None:
     recorder = load("record_commit")
     server_module = load("serve_dashboard")
@@ -212,6 +254,7 @@ def main() -> None:
                         )
                         assert page.locator("#recording-language").is_enabled()
                         page.close()
+                        check_live_following(browser, recorder, server_module)
                     finally:
                         browser.close()
                     # Restore original fixture for the next browser.
